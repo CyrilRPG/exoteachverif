@@ -15,14 +15,14 @@ st.markdown("""
 <style>
 :root { --radius: 14px; }
 .block-container { padding-top: 1rem; }
-.stButton>button, .stDownloadButton>button { border-radius: var(--radius); padding: 0.55rem 0.9rem; }
+.stButton>button, .stDownloadButton>button { border-radius: var(--radius); padding:0.55rem 0.9rem; }
 .kpi { border:1px solid #e5e7eb; border-radius: var(--radius); padding:0.8rem; background:#fafafa; }
 small.dim { color:#6b7280; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("Vérification des groupes étudiants — format I3/I4+")
-st.caption("Détecte automatiquement la colonne Groupes à partir de I3 (titre) et lit les données dès la ligne 4.")
+st.caption("Détecte automatiquement la colonne Groupes à partir de I3 (titre) et lit les données dès la ligne 4. Export d’erreurs = Nom, Prénom, Diagnostic.")
 
 # -------------------------------
 # RÉFÉRENTIEL OFFICIEL
@@ -87,6 +87,9 @@ OFFICIEL: Dict[int, Tuple[str, str]] = {
 
 NUM_RE = re.compile(r"\d+")
 
+# -------------------------------
+# ANALYSE GROUPES
+# -------------------------------
 def parse_numeros(groupes_str: Any) -> List[int]:
     if pd.isna(groupes_str):
         return []
@@ -137,17 +140,51 @@ def extra_info(groupes_str: Any) -> Dict[str, Any]:
     }
 
 # -------------------------------
-# SIDEBAR — OPTIONS IMPORT
+# UTILS IMPORT (I3/I4+)
+# -------------------------------
+def excel_col_to_index(col_letter: str) -> int:
+    col_letter = col_letter.strip().upper()
+    total = 0
+    for ch in col_letter:
+        if not ('A' <= ch <= 'Z'):
+            raise ValueError("Lettre de colonne invalide.")
+        total = total * 26 + (ord(ch) - ord('A') + 1)
+    return total - 1
+
+def make_unique(cols: List[str]) -> List[str]:
+    seen: Dict[str, int] = {}
+    out: List[str] = []
+    for c in cols:
+        c = str(c)
+        if c in seen:
+            seen[c] += 1
+            out.append(f"{c}.{seen[c]}")
+        else:
+            seen[c] = 0
+            out.append(c)
+    return out
+
+def autodetect_name_columns(columns: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Essaie de trouver Nom/Prénom par mots-clés."""
+    lower_map = {c: str(c).strip().lower() for c in columns}
+    nom_candidates = [c for c, l in lower_map.items() if any(k in l for k in ["nom", "last name"])]
+    prenom_candidates = [c for c, l in lower_map.items() if any(k in l for k in ["prénom", "prenom", "first name"])]
+    nom_col = nom_candidates[0] if nom_candidates else None
+    prenom_col = prenom_candidates[0] if prenom_candidates else None
+    return nom_col, prenom_col
+
+# -------------------------------
+# SIDEBAR — OPTIONS
 # -------------------------------
 with st.sidebar:
     st.header("⚙️ Options d'import")
     use_sheet = st.text_input("Nom de l'onglet (laisser vide pour auto)", value="")
-    # Paramètres de secours si jamais un fichier sort du format I3/I4+
-    col_letter_override = st.text_input("Forcer colonne (ex: I)", value="I")
-    start_row_override = st.number_input("Forcer ligne de départ des données", min_value=1, value=4, step=1)
+    col_letter_override = st.text_input("Colonne Groupes (défaut I)", value="I")
+    start_row_override = st.number_input("Ligne de départ des données (défaut 4)", min_value=1, value=4, step=1)
     show_debug = st.checkbox("Afficher colonnes techniques", value=False)
     st.markdown("---")
-    st.caption("Par défaut : colonne **I** et données à partir de la **ligne 4** (I3 contient le titre).")
+    st.header("🧭 Colonnes Nom/Prénom")
+    st.caption("Auto-détection par mots-clés. Tu peux forcer ci-dessous si besoin.")
 
 # -------------------------------
 # UPLOAD
@@ -178,64 +215,53 @@ st.write(f"**Onglet lu:** `{sheet_name}`")
 # -------------------------------
 # DÉTECTION I3 / EXTRACTION COL I
 # -------------------------------
-# Contrainte : I3 = (ligne 3 Excel) => index pandas 2 ; I4+ => index pandas >= 3
-# Colonne I => 9e colonne => index pandas 8
-def excel_col_to_index(col_letter: str) -> int:
-    """Convertit une lettre Excel (ex: 'I') en index 0-based."""
-    col_letter = col_letter.strip().upper()
-    total = 0
-    for ch in col_letter:
-        if not ('A' <= ch <= 'Z'):
-            raise ValueError("Lettre de colonne invalide.")
-        total = total * 26 + (ord(ch) - ord('A') + 1)
-    return total - 1
-
 try:
     groupes_col_idx = excel_col_to_index(col_letter_override or "I")
 except Exception:
     groupes_col_idx = 8  # fallback I
 
 start_row_idx = int(start_row_override) - 1  # 0-based
+header_row_idx = 2  # I3 (ligne 3) = en-têtes
 
-# On lit les en-têtes à la ligne 3 (index 2) : ce sont les libellés au-dessus des données
-header_row_idx = 2
 if header_row_idx >= len(raw):
     st.error("La ligne d'en-tête (3) n'existe pas dans ce fichier.")
     st.stop()
-
-headers = list(raw.iloc[header_row_idx].astype(str))
-# Dédupe si doublons dans les en-têtes
-def make_unique(cols: List[str]) -> List[str]:
-    seen = {}
-    out = []
-    for c in cols:
-        if c in seen:
-            seen[c] += 1
-            out.append(f"{c}.{seen[c]}")
-        else:
-            seen[c] = 0
-            out.append(c)
-    return out
-
-headers = make_unique(headers)
-
-# Données à partir de la ligne 4 (index 3)
 if start_row_idx >= len(raw):
     st.error("La ligne de départ des données dépasse la taille du fichier.")
     st.stop()
-
-data = raw.iloc[start_row_idx:, :].reset_index(drop=True)
-data.columns = headers[: data.shape[1]] + [f"COL_{i}" for i in range(data.shape[1]-len(headers))]
-
-# Récupération de la colonne Groupes depuis la colonne I (index connu)
 if groupes_col_idx >= raw.shape[1]:
-    st.error("La colonne indiquée dépasse le nombre de colonnes du fichier.")
+    st.error("La colonne Groupes dépasse le nombre de colonnes du fichier.")
     st.stop()
 
-groupes_series = raw.iloc[start_row_idx:, groupes_col_idx].reset_index(drop=True)
-# On ajoute une colonne normalisée pour l'analyse
-GROUPES_COL_NAME = "Groupes (détecté depuis I3/I4+)"
-data[GROUPES_COL_NAME] = groupes_series
+headers = make_unique(list(raw.iloc[header_row_idx].astype(str)))
+data = raw.iloc[start_row_idx:, :].reset_index(drop=True)
+# Harmonise le nombre de colonnes vs headers
+if data.shape[1] > len(headers):
+    headers = headers + [f"COL_{i}" for i in range(data.shape[1] - len(headers))]
+else:
+    headers = headers[: data.shape[1]]
+data.columns = headers
+
+GROUPES_COL_NAME = "Groupes (détecté I3/I4+)"
+data[GROUPES_COL_NAME] = raw.iloc[start_row_idx:, groupes_col_idx].reset_index(drop=True)
+
+# -------------------------------
+# AUTO-DET NOM/PRÉNOM + UI DE FORCAGE
+# -------------------------------
+nom_guess, prenom_guess = autodetect_name_columns(list(data.columns))
+col1, col2 = st.columns(2)
+with col1:
+    nom_col = st.selectbox("Colonne Nom", options=["—"] + list(data.columns),
+                           index=(["—"] + list(data.columns)).index(nom_guess) if nom_guess in (["—"] + list(data.columns)) else 0)
+with col2:
+    prenom_col = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns),
+                              index=(["—"] + list(data.columns)).index(prenom_guess) if prenom_guess in (["—"] + list(data.columns)) else 0)
+
+nom_col = None if nom_col == "—" else nom_col
+prenom_col = None if prenom_col == "—" else prenom_col
+
+if not nom_col or not prenom_col:
+    st.warning("⚠️ Merci de vérifier/choisir les colonnes **Nom** et **Prénom** avant d’exporter les erreurs.")
 
 # -------------------------------
 # ANALYSE
@@ -275,19 +301,55 @@ st.dataframe(df[display_cols], use_container_width=True)
 # -------------------------------
 # EXPORTS
 # -------------------------------
+# JSON complet
 records = df.to_dict(orient="records")
 json_bytes = json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8")
 st.download_button("⬇️ Télécharger JSON (complet)", data=json_bytes, file_name="export_verifie.json", mime="application/json")
 
-erreurs = df[df["Diagnostic"] != "OK"]
-if not erreurs.empty:
-    csv_err = erreurs[display_cols].to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Télécharger uniquement les erreurs (CSV)", data=csv_err, file_name="erreurs_groupes.csv", mime="text/csv")
+# CSV erreurs (seulement Nom, Prénom, Diagnostic)
+erreurs = df[df["Diagnostic"] != "OK"].copy()
+
+# Prépare les 3 colonnes proprement
+def safe_col(s: pd.Series) -> pd.Series:
+    return s.astype(str).fillna("").replace({"nan": ""})
+
+if erreurs.empty:
+    st.info("Aucune erreur à exporter 🎉")
+else:
+    # Crée d'éventuelles colonnes vides si non sélectionnées
+    if nom_col not in erreurs.columns:
+        erreurs["__NOM__"] = ""
+        nom_for_export = "__NOM__"
+        st.warning("La colonne Nom sélectionnée n’existe pas dans les données — exportera une colonne vide.")
+    else:
+        nom_for_export = nom_col
+
+    if prenom_col not in erreurs.columns:
+        erreurs["__PRENOM__"] = ""
+        prenom_for_export = "__PRENOM__"
+        st.warning("La colonne Prénom sélectionnée n’existe pas dans les données — exportera une colonne vide.")
+    else:
+        prenom_for_export = prenom_col
+
+    export_df = pd.DataFrame({
+        "Nom": safe_col(erreurs[nom_for_export]) if nom_for_export in erreurs else "",
+        "Prénom": safe_col(erreurs[prenom_for_export]) if prenom_for_export in erreurs else "",
+        "Diagnostic": safe_col(erreurs["Diagnostic"]),
+    })
+
+    csv_err = export_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇️ Télécharger uniquement les erreurs (CSV)",
+        data=csv_err,
+        file_name="erreurs_groupes.csv",
+        mime="text/csv",
+    )
 
 st.markdown("""
 #### Hypothèses & règles spécifiques
 - La cellule **I3** contient le libellé “Groupes (chiffes séparés par un espace) Par exemple : 1 4 24”.
-- Les **données** commencent à **I4** (et plus généralement, ligne **4** pour tout le tableau).
-- L’app lit la **colonne I** comme colonne Groupes (tu peux la forcer dans la barre latérale).
+- Les **données** commencent à **I4** (ligne 4).
+- L’app lit la **colonne I** comme colonne Groupes par défaut (forçable dans la barre latérale).
+- **Export erreurs CSV** : uniquement **Nom**, **Prénom**, **Diagnostic**.
 - Les numéros **non** présents dans la liste officielle **n’entraînent pas d’erreur**.
 """)
