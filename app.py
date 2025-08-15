@@ -1,4 +1,4 @@
-
+# app.py
 import io
 import json
 import re
@@ -8,23 +8,25 @@ import pandas as pd
 import streamlit as st
 
 # -------------------------------
-# Streamlit App Config
+# CONFIG UI
 # -------------------------------
-st.set_page_config(page_title="Vérif Groupes Étudiants", page_icon="✅", layout="wide")
-
-# Minimal pleasant styling
+st.set_page_config(page_title="Vérif Groupes Étudiants (I3/I4+)", page_icon="✅", layout="wide")
 st.markdown("""
 <style>
 :root { --radius: 14px; }
-.block-container { padding-top: 1.2rem; }
+.block-container { padding-top: 1rem; }
 .stButton>button, .stDownloadButton>button { border-radius: var(--radius); padding: 0.55rem 0.9rem; }
 .kpi { border:1px solid #e5e7eb; border-radius: var(--radius); padding:0.8rem; background:#fafafa; }
 small.dim { color:#6b7280; }
 </style>
 """, unsafe_allow_html=True)
 
+st.title("Vérification des groupes étudiants — format I3/I4+")
+st.caption("Détecte automatiquement la colonne Groupes à partir de I3 (titre) et lit les données dès la ligne 4.")
+
 # -------------------------------
-# Liste officielle (numéro -> (nom filière, type))
+# RÉFÉRENTIEL OFFICIEL
+# numéro -> (nom filière, 'Filière'|'Classe')
 # -------------------------------
 OFFICIEL: Dict[int, Tuple[str, str]] = {
     5944: ("USPN", "Classe"),
@@ -83,12 +85,8 @@ OFFICIEL: Dict[int, Tuple[str, str]] = {
     5027: ("Première Élite", "Filière"),
 }
 
-# Regex pour extraire tous les nombres (plus robuste que split sur espaces)
-NUM_RE = re.compile(r"\\d+")
+NUM_RE = re.compile(r"\d+")
 
-# -------------------------------
-# Helpers Analyse
-# -------------------------------
 def parse_numeros(groupes_str: Any) -> List[int]:
     if pd.isna(groupes_str):
         return []
@@ -112,7 +110,6 @@ def analyser_groupes(groupes_str: Any) -> str:
     if len(classes) > 1:
         return "Plusieurs classes"
 
-    # 1 filière + 1 classe -> vérifier cohérence du label
     filiere_nom = OFFICIEL[filieres[0]][0]
     classe_nom  = OFFICIEL[classes[0]][0]
     if filiere_nom != classe_nom:
@@ -140,62 +137,117 @@ def extra_info(groupes_str: Any) -> Dict[str, Any]:
     }
 
 # -------------------------------
-# Barre latérale (paramètres)
+# SIDEBAR — OPTIONS IMPORT
 # -------------------------------
 with st.sidebar:
     st.header("⚙️ Options d'import")
-    header_row_display = st.number_input("Ligne d'en-tête (1 = première ligne)", min_value=1, value=1, step=1)
-    header_row = header_row_display - 1  # pandas header index
     use_sheet = st.text_input("Nom de l'onglet (laisser vide pour auto)", value="")
+    # Paramètres de secours si jamais un fichier sort du format I3/I4+
+    col_letter_override = st.text_input("Forcer colonne (ex: I)", value="I")
+    start_row_override = st.number_input("Forcer ligne de départ des données", min_value=1, value=4, step=1)
     show_debug = st.checkbox("Afficher colonnes techniques", value=False)
     st.markdown("---")
-    st.caption("Si votre fichier a des en-têtes sur plusieurs lignes, changez la ligne d'en-tête.")
+    st.caption("Par défaut : colonne **I** et données à partir de la **ligne 4** (I3 contient le titre).")
 
-st.title("Vérification des groupes étudiants")
-st.caption("Upload Excel → choix de l'onglet et de la colonne → diagnostic automatique → export JSON/CSV.")
-
+# -------------------------------
+# UPLOAD
+# -------------------------------
 uploaded = st.file_uploader("Dépose un fichier Excel (.xlsx, .xls)", type=["xlsx", "xls"])
-
 if not uploaded:
     st.info("Charge un fichier pour commencer.")
     st.stop()
 
-# Lecture des onglets si xlsx multi-sheets
+# -------------------------------
+# LECTURE BRUTE (sans header)
+# -------------------------------
 xl = pd.ExcelFile(uploaded)
 sheet_name: Optional[str] = None
 if use_sheet and use_sheet in xl.sheet_names:
     sheet_name = use_sheet
 else:
-    # heuristique: prendre le premier onglet
     sheet_name = xl.sheet_names[0]
 
 try:
-    df_raw = pd.read_excel(uploaded, sheet_name=sheet_name, header=header_row)
+    raw = pd.read_excel(uploaded, sheet_name=sheet_name, header=None)
 except Exception as e:
     st.error(f"Erreur de lecture: {e}")
     st.stop()
 
-st.write(f"**Onglet lu:** `{sheet_name}` — **ligne d'en-tête:** {header_row_display}")
+st.write(f"**Onglet lu:** `{sheet_name}`")
 
-# Proposer la sélection de la colonne "Groupes"
-# Heuristique d'auto-détection: choisir la colonne avec le plus de nombres >= 4 chiffres
-def score_col(s: pd.Series) -> int:
-    try:
-        return s.astype(str).str.count(r"\\d{4,}").fillna(0).astype(int).sum()
-    except Exception:
-        return 0
+# -------------------------------
+# DÉTECTION I3 / EXTRACTION COL I
+# -------------------------------
+# Contrainte : I3 = (ligne 3 Excel) => index pandas 2 ; I4+ => index pandas >= 3
+# Colonne I => 9e colonne => index pandas 8
+def excel_col_to_index(col_letter: str) -> int:
+    """Convertit une lettre Excel (ex: 'I') en index 0-based."""
+    col_letter = col_letter.strip().upper()
+    total = 0
+    for ch in col_letter:
+        if not ('A' <= ch <= 'Z'):
+            raise ValueError("Lettre de colonne invalide.")
+        total = total * 26 + (ord(ch) - ord('A') + 1)
+    return total - 1
 
-candidate_cols = sorted(df_raw.columns, key=lambda c: score_col(df_raw[c]), reverse=True)
-default_col = candidate_cols[0] if candidate_cols else None
-groupes_col = st.selectbox("Choisis la colonne contenant les numéros de groupes", options=list(df_raw.columns), index=(list(df_raw.columns).index(default_col) if default_col in df_raw.columns else 0))
+try:
+    groupes_col_idx = excel_col_to_index(col_letter_override or "I")
+except Exception:
+    groupes_col_idx = 8  # fallback I
 
-# Analyse
-df = df_raw.copy()
-df["Diagnostic"] = df[groupes_col].apply(analyser_groupes)
-extras = df[groupes_col].apply(extra_info).apply(pd.Series)
+start_row_idx = int(start_row_override) - 1  # 0-based
+
+# On lit les en-têtes à la ligne 3 (index 2) : ce sont les libellés au-dessus des données
+header_row_idx = 2
+if header_row_idx >= len(raw):
+    st.error("La ligne d'en-tête (3) n'existe pas dans ce fichier.")
+    st.stop()
+
+headers = list(raw.iloc[header_row_idx].astype(str))
+# Dédupe si doublons dans les en-têtes
+def make_unique(cols: List[str]) -> List[str]:
+    seen = {}
+    out = []
+    for c in cols:
+        if c in seen:
+            seen[c] += 1
+            out.append(f"{c}.{seen[c]}")
+        else:
+            seen[c] = 0
+            out.append(c)
+    return out
+
+headers = make_unique(headers)
+
+# Données à partir de la ligne 4 (index 3)
+if start_row_idx >= len(raw):
+    st.error("La ligne de départ des données dépasse la taille du fichier.")
+    st.stop()
+
+data = raw.iloc[start_row_idx:, :].reset_index(drop=True)
+data.columns = headers[: data.shape[1]] + [f"COL_{i}" for i in range(data.shape[1]-len(headers))]
+
+# Récupération de la colonne Groupes depuis la colonne I (index connu)
+if groupes_col_idx >= raw.shape[1]:
+    st.error("La colonne indiquée dépasse le nombre de colonnes du fichier.")
+    st.stop()
+
+groupes_series = raw.iloc[start_row_idx:, groupes_col_idx].reset_index(drop=True)
+# On ajoute une colonne normalisée pour l'analyse
+GROUPES_COL_NAME = "Groupes (détecté depuis I3/I4+)"
+data[GROUPES_COL_NAME] = groupes_series
+
+# -------------------------------
+# ANALYSE
+# -------------------------------
+df = data.copy()
+df["Diagnostic"] = df[GROUPES_COL_NAME].apply(analyser_groupes)
+extras = df[GROUPES_COL_NAME].apply(extra_info).apply(pd.Series)
 df = pd.concat([df, extras], axis=1)
 
+# -------------------------------
 # KPIs
+# -------------------------------
 c1, c2, c3, c4, c5 = st.columns(5)
 total = len(df)
 n_ok = (df["Diagnostic"] == "OK").sum()
@@ -209,14 +261,20 @@ with c3: st.markdown(f'<div class="kpi"><b>Incohérents</b><br><span style="font
 with c4: st.markdown(f'<div class="kpi"><b>Pas de filière</b><br><span style="font-size:1.4rem">{n_pas_fil}</span></div>', unsafe_allow_html=True)
 with c5: st.markdown(f'<div class="kpi"><b>Pas de classe</b><br><span style="font-size:1.4rem">{n_pas_cls}</span></div>', unsafe_allow_html=True)
 
-st.markdown("### Aperçu des données")
-base_cols = [c for c in df.columns if c not in [groupes_col, "Diagnostic", "FiliereDéduite", "ClasseDéduite", "NumerosTrouvés", "NumerosConnus", "NumerosInconnus"]]
-display_cols = base_cols + [groupes_col, "Diagnostic"]
+# -------------------------------
+# TABLEAU
+# -------------------------------
+base_cols = [c for c in df.columns if c not in [GROUPES_COL_NAME, "Diagnostic", "FiliereDéduite", "ClasseDéduite", "NumerosTrouvés", "NumerosConnus", "NumerosInconnus"]]
+display_cols = base_cols + [GROUPES_COL_NAME, "Diagnostic"]
 if show_debug:
     display_cols += ["FiliereDéduite", "ClasseDéduite", "NumerosTrouvés", "NumerosConnus", "NumerosInconnus"]
+
+st.markdown("### Aperçu des données")
 st.dataframe(df[display_cols], use_container_width=True)
 
-# Exports
+# -------------------------------
+# EXPORTS
+# -------------------------------
 records = df.to_dict(orient="records")
 json_bytes = json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8")
 st.download_button("⬇️ Télécharger JSON (complet)", data=json_bytes, file_name="export_verifie.json", mime="application/json")
@@ -227,11 +285,9 @@ if not erreurs.empty:
     st.download_button("⬇️ Télécharger uniquement les erreurs (CSV)", data=csv_err, file_name="erreurs_groupes.csv", mime="text/csv")
 
 st.markdown("""
-#### Rappels de règles
-- **OK** : 1 filière + 1 classe officielles, cohérentes entre elles.
-- **Pas de filière** : classe officielle détectée mais aucune filière.
-- **Pas de classe** : filière officielle détectée mais aucune classe.
-- **Pas de classe ni de filière** : aucun numéro officiel détecté (les autres numéros sont ignorés).
-- **Plusieurs filières / classes** : plus d'une filière ou plus d'une classe détectée.
-- **Classe et filière incohérents** : la classe détectée n'appartient pas à la filière détectée.
+#### Hypothèses & règles spécifiques
+- La cellule **I3** contient le libellé “Groupes (chiffes séparés par un espace) Par exemple : 1 4 24”.
+- Les **données** commencent à **I4** (et plus généralement, ligne **4** pour tout le tableau).
+- L’app lit la **colonne I** comme colonne Groupes (tu peux la forcer dans la barre latérale).
+- Les numéros **non** présents dans la liste officielle **n’entraînent pas d’erreur**.
 """)
