@@ -1,5 +1,5 @@
-# app.py
-import io
+
+# app.py (v2) — I3/I4+ detection, full breakdown totals, clean CSV (Nom, Prénom, Diagnostic)
 import json
 import re
 from typing import List, Tuple, Dict, Any, Optional
@@ -7,10 +7,7 @@ from typing import List, Tuple, Dict, Any, Optional
 import pandas as pd
 import streamlit as st
 
-# -------------------------------
-# CONFIG UI
-# -------------------------------
-st.set_page_config(page_title="Vérif Groupes Étudiants (I3/I4+)", page_icon="✅", layout="wide")
+st.set_page_config(page_title="Vérif Groupes Étudiants — I3/I4+", page_icon="✅", layout="wide")
 st.markdown("""
 <style>
 :root { --radius: 14px; }
@@ -22,12 +19,9 @@ small.dim { color:#6b7280; }
 """, unsafe_allow_html=True)
 
 st.title("Vérification des groupes étudiants — format I3/I4+")
-st.caption("Détecte automatiquement la colonne Groupes à partir de I3 (titre) et lit les données dès la ligne 4. Export d’erreurs = Nom, Prénom, Diagnostic.")
+st.caption("Repère I3 comme libellé de la colonne Groupes et lit les données à partir de la ligne 4. Les totaux correspondent exactement à la somme des catégories.")
 
-# -------------------------------
-# RÉFÉRENTIEL OFFICIEL
-# numéro -> (nom filière, 'Filière'|'Classe')
-# -------------------------------
+# ---------- Référentiel officiel ----------
 OFFICIEL: Dict[int, Tuple[str, str]] = {
     5944: ("USPN", "Classe"),
     5943: ("USPN", "Classe"),
@@ -85,11 +79,8 @@ OFFICIEL: Dict[int, Tuple[str, str]] = {
     5027: ("Première Élite", "Filière"),
 }
 
-NUM_RE = re.compile(r"\d+")
+NUM_RE = re.compile(r"\\d+")
 
-# -------------------------------
-# ANALYSE GROUPES
-# -------------------------------
 def parse_numeros(groupes_str: Any) -> List[int]:
     if pd.isna(groupes_str):
         return []
@@ -139,9 +130,6 @@ def extra_info(groupes_str: Any) -> Dict[str, Any]:
         "ClasseDéduite": classe_label,
     }
 
-# -------------------------------
-# UTILS IMPORT (I3/I4+)
-# -------------------------------
 def excel_col_to_index(col_letter: str) -> int:
     col_letter = col_letter.strip().upper()
     total = 0
@@ -165,7 +153,6 @@ def make_unique(cols: List[str]) -> List[str]:
     return out
 
 def autodetect_name_columns(columns: List[str]) -> Tuple[Optional[str], Optional[str]]:
-    """Essaie de trouver Nom/Prénom par mots-clés."""
     lower_map = {c: str(c).strip().lower() for c in columns}
     nom_candidates = [c for c, l in lower_map.items() if any(k in l for k in ["nom", "last name"])]
     prenom_candidates = [c for c, l in lower_map.items() if any(k in l for k in ["prénom", "prenom", "first name"])]
@@ -173,30 +160,24 @@ def autodetect_name_columns(columns: List[str]) -> Tuple[Optional[str], Optional
     prenom_col = prenom_candidates[0] if prenom_candidates else None
     return nom_col, prenom_col
 
-# -------------------------------
-# SIDEBAR — OPTIONS
-# -------------------------------
+# ---------- Sidebar ----------
 with st.sidebar:
-    st.header("⚙️ Options d'import")
+    st.header("⚙️ Import")
     use_sheet = st.text_input("Nom de l'onglet (laisser vide pour auto)", value="")
     col_letter_override = st.text_input("Colonne Groupes (défaut I)", value="I")
     start_row_override = st.number_input("Ligne de départ des données (défaut 4)", min_value=1, value=4, step=1)
     show_debug = st.checkbox("Afficher colonnes techniques", value=False)
     st.markdown("---")
     st.header("🧭 Colonnes Nom/Prénom")
-    st.caption("Auto-détection par mots-clés. Tu peux forcer ci-dessous si besoin.")
+    st.caption("Auto-détection, mais tu peux forcer.")
+    export_semicolon = st.checkbox("CSV erreurs avec point-virgule (;)", value=True)
+    st.caption("Coche pour Excel FR. L'encodage inclut un BOM (utf-8-sig) pour les accents.")
 
-# -------------------------------
-# UPLOAD
-# -------------------------------
 uploaded = st.file_uploader("Dépose un fichier Excel (.xlsx, .xls)", type=["xlsx", "xls"])
 if not uploaded:
     st.info("Charge un fichier pour commencer.")
     st.stop()
 
-# -------------------------------
-# LECTURE BRUTE (sans header)
-# -------------------------------
 xl = pd.ExcelFile(uploaded)
 sheet_name: Optional[str] = None
 if use_sheet and use_sheet in xl.sheet_names:
@@ -212,16 +193,14 @@ except Exception as e:
 
 st.write(f"**Onglet lu:** `{sheet_name}`")
 
-# -------------------------------
-# DÉTECTION I3 / EXTRACTION COL I
-# -------------------------------
+# I3 / I4+
 try:
     groupes_col_idx = excel_col_to_index(col_letter_override or "I")
 except Exception:
-    groupes_col_idx = 8  # fallback I
+    groupes_col_idx = 8
 
-start_row_idx = int(start_row_override) - 1  # 0-based
-header_row_idx = 2  # I3 (ligne 3) = en-têtes
+start_row_idx = int(start_row_override) - 1
+header_row_idx = 2
 
 if header_row_idx >= len(raw):
     st.error("La ligne d'en-tête (3) n'existe pas dans ce fichier.")
@@ -235,7 +214,6 @@ if groupes_col_idx >= raw.shape[1]:
 
 headers = make_unique(list(raw.iloc[header_row_idx].astype(str)))
 data = raw.iloc[start_row_idx:, :].reset_index(drop=True)
-# Harmonise le nombre de colonnes vs headers
 if data.shape[1] > len(headers):
     headers = headers + [f"COL_{i}" for i in range(data.shape[1] - len(headers))]
 else:
@@ -245,9 +223,7 @@ data.columns = headers
 GROUPES_COL_NAME = "Groupes (détecté I3/I4+)"
 data[GROUPES_COL_NAME] = raw.iloc[start_row_idx:, groupes_col_idx].reset_index(drop=True)
 
-# -------------------------------
-# AUTO-DET NOM/PRÉNOM + UI DE FORCAGE
-# -------------------------------
+# Nom/Prénom
 nom_guess, prenom_guess = autodetect_name_columns(list(data.columns))
 col1, col2 = st.columns(2)
 with col1:
@@ -261,95 +237,96 @@ nom_col = None if nom_col == "—" else nom_col
 prenom_col = None if prenom_col == "—" else prenom_col
 
 if not nom_col or not prenom_col:
-    st.warning("⚠️ Merci de vérifier/choisir les colonnes **Nom** et **Prénom** avant d’exporter les erreurs.")
+    st.warning("⚠️ Choisis/valide les colonnes **Nom** et **Prénom** pour un export d'erreurs correct.")
 
-# -------------------------------
-# ANALYSE
-# -------------------------------
+# Analyse
 df = data.copy()
 df["Diagnostic"] = df[GROUPES_COL_NAME].apply(analyser_groupes)
 extras = df[GROUPES_COL_NAME].apply(extra_info).apply(pd.Series)
 df = pd.concat([df, extras], axis=1)
 
-# -------------------------------
-# KPIs
-# -------------------------------
-c1, c2, c3, c4, c5 = st.columns(5)
-total = len(df)
-n_ok = (df["Diagnostic"] == "OK").sum()
-n_incoh = (df["Diagnostic"] == "Classe et filière incohérents").sum()
-n_pas_fil = (df["Diagnostic"] == "Pas de filière").sum()
-n_pas_cls = (df["Diagnostic"] == "Pas de classe").sum()
+# Breakdown complet (toutes catégories)
+counts = df["Diagnostic"].value_counts().sort_index()
+total = int(len(df))
 
-with c1: st.markdown(f'<div class="kpi"><b>Total</b><br><span style="font-size:1.4rem">{total}</span></div>', unsafe_allow_html=True)
-with c2: st.markdown(f'<div class="kpi"><b>OK</b><br><span style="font-size:1.4rem">{n_ok}</span></div>', unsafe_allow_html=True)
-with c3: st.markdown(f'<div class="kpi"><b>Incohérents</b><br><span style="font-size:1.4rem">{n_incoh}</span></div>', unsafe_allow_html=True)
-with c4: st.markdown(f'<div class="kpi"><b>Pas de filière</b><br><span style="font-size:1.4rem">{n_pas_fil}</span></div>', unsafe_allow_html=True)
-with c5: st.markdown(f'<div class="kpi"><b>Pas de classe</b><br><span style="font-size:1.4rem">{n_pas_cls}</span></div>', unsafe_allow_html=True)
+# KPIs dynamiques (garantit la somme)
+kcols = st.columns(min(6, max(1, len(counts) + 1)))
+with kcols[0]:
+    st.markdown(f'<div class="kpi"><b>Total</b><br><span style="font-size:1.4rem">{total}</span></div>', unsafe_allow_html=True)
 
-# -------------------------------
-# TABLEAU
-# -------------------------------
+# Affiche les 5 premières catégories en KPI, le reste en tableau
+kpi_shown = 0
+for i, (label, n) in enumerate(counts.items(), start=1):
+    if i < len(kcols):
+        with kcols[i]:
+            st.markdown(f'<div class="kpi"><b>{label}</b><br><span style="font-size:1.4rem">{int(n)}</span></div>', unsafe_allow_html=True)
+            kpi_shown += 1
+
+# Tableau complet des catégories (s'assure que la somme est visible)
+st.markdown("#### Répartition par diagnostic")
+rep_df = counts.reset_index()
+rep_df.columns = ["Diagnostic", "Effectif"]
+rep_df.loc[len(rep_df)] = ["Total", total]
+st.dataframe(rep_df, use_container_width=True)
+
+# Tableau principal
 base_cols = [c for c in df.columns if c not in [GROUPES_COL_NAME, "Diagnostic", "FiliereDéduite", "ClasseDéduite", "NumerosTrouvés", "NumerosConnus", "NumerosInconnus"]]
 display_cols = base_cols + [GROUPES_COL_NAME, "Diagnostic"]
-if show_debug:
+if st.checkbox("Afficher colonnes techniques", value=show_debug):
     display_cols += ["FiliereDéduite", "ClasseDéduite", "NumerosTrouvés", "NumerosConnus", "NumerosInconnus"]
 
 st.markdown("### Aperçu des données")
 st.dataframe(df[display_cols], use_container_width=True)
 
-# -------------------------------
-# EXPORTS
-# -------------------------------
-# JSON complet
+# Export JSON (complet)
 records = df.to_dict(orient="records")
 json_bytes = json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8")
 st.download_button("⬇️ Télécharger JSON (complet)", data=json_bytes, file_name="export_verifie.json", mime="application/json")
 
-# CSV erreurs (seulement Nom, Prénom, Diagnostic)
+# Export erreurs (Nom, Prénom, Diagnostic) — propre
 erreurs = df[df["Diagnostic"] != "OK"].copy()
 
-# Prépare les 3 colonnes proprement
 def safe_col(s: pd.Series) -> pd.Series:
     return s.astype(str).fillna("").replace({"nan": ""})
 
 if erreurs.empty:
     st.info("Aucune erreur à exporter 🎉")
 else:
-    # Crée d'éventuelles colonnes vides si non sélectionnées
-    if nom_col not in erreurs.columns:
+    # Colonnes Nom/Prénom sécurisées
+    nom_for_export = nom_col if nom_col in erreurs.columns else None
+    prenom_for_export = prenom_col if prenom_col in erreurs.columns else None
+
+    if not nom_for_export:
         erreurs["__NOM__"] = ""
         nom_for_export = "__NOM__"
-        st.warning("La colonne Nom sélectionnée n’existe pas dans les données — exportera une colonne vide.")
-    else:
-        nom_for_export = nom_col
-
-    if prenom_col not in erreurs.columns:
+        st.warning("La colonne Nom sélectionnée n’existe pas — exportera une colonne vide.")
+    if not prenom_for_export:
         erreurs["__PRENOM__"] = ""
         prenom_for_export = "__PRENOM__"
-        st.warning("La colonne Prénom sélectionnée n’existe pas dans les données — exportera une colonne vide.")
-    else:
-        prenom_for_export = prenom_col
+        st.warning("La colonne Prénom sélectionnée n’existe pas — exportera une colonne vide.")
 
     export_df = pd.DataFrame({
-        "Nom": safe_col(erreurs[nom_for_export]) if nom_for_export in erreurs else "",
-        "Prénom": safe_col(erreurs[prenom_for_export]) if prenom_for_export in erreurs else "",
+        "Nom": safe_col(erreurs[nom_for_export]),
+        "Prénom": safe_col(erreurs[prenom_for_export]),
         "Diagnostic": safe_col(erreurs["Diagnostic"]),
     })
 
-    csv_err = export_df.to_csv(index=False).encode("utf-8")
+    sep = ";" if export_semicolon else ","
+    csv_text = export_df.to_csv(index=False, sep=sep)
+    csv_bytes = csv_text.encode("utf-8-sig")  # BOM for Excel/accents
     st.download_button(
-        "⬇️ Télécharger uniquement les erreurs (CSV)",
-        data=csv_err,
+        "⬇️ Télécharger uniquement les erreurs (CSV) — 3 colonnes",
+        data=csv_bytes,
         file_name="erreurs_groupes.csv",
         mime="text/csv",
     )
 
 st.markdown("""
-#### Hypothèses & règles spécifiques
-- La cellule **I3** contient le libellé “Groupes (chiffes séparés par un espace) Par exemple : 1 4 24”.
-- Les **données** commencent à **I4** (ligne 4).
-- L’app lit la **colonne I** comme colonne Groupes par défaut (forçable dans la barre latérale).
-- **Export erreurs CSV** : uniquement **Nom**, **Prénom**, **Diagnostic**.
-- Les numéros **non** présents dans la liste officielle **n’entraînent pas d’erreur**.
+**Règles de validation**  
+- OK : 1 filière + 1 classe officielles, et cohérentes.  
+- Pas de filière : classe officielle détectée mais aucune filière.  
+- Pas de classe : filière officielle détectée mais aucune classe.  
+- Pas de classe ni de filière : aucun numéro officiel détecté (les autres numéros sont ignorés).  
+- Plusieurs filières / classes : >1 filière ou >1 classe officielle détectée.  
+- Classe et filière incohérents : appartiennent à des filières différentes.
 """)
