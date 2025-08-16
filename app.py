@@ -1,4 +1,4 @@
-# app.py (v3) — robust I3/I4+ with auto data-start detection & clean errors CSV
+# app.py (v3+) — I3/I4+ auto-start, CSV propre, exceptions "classe sans filière"
 import json
 import re
 from typing import List, Tuple, Dict, Any, Optional
@@ -18,7 +18,7 @@ small.dim { color:#6b7280; }
 """, unsafe_allow_html=True)
 
 st.title("Vérification des groupes étudiants — format I3/I4+")
-st.caption("Repère I3 comme libellé, détecte automatiquement la première ligne de données sous I3, et garantit des exports propres.")
+st.caption("Repère I3 comme libellé, détecte automatiquement la première ligne de données sous I3, gère les exceptions, et garantit des exports propres.")
 
 # ---------- Référentiel officiel ----------
 OFFICIEL: Dict[int, Tuple[str, str]] = {
@@ -55,6 +55,11 @@ OFFICIEL: Dict[int, Tuple[str, str]] = {
     6128: ("Première Élite", "Classe"), 5027: ("Première Élite", "Filière"),
 }
 
+# ---------- Exceptions "classe sans filière => OK" ----------
+EXCEPTION_OK_IF_CLASS_ONLY = {
+    4538, 4537, 4388, 4386, 4385, 4384, 4383, 4382, 4381, 4380, 4379, 4378, 4377, 4376, 4375
+}
+
 NUM_RE = re.compile(r"\d+")
 
 def parse_numeros(groupes_str: Any) -> List[int]:
@@ -65,15 +70,26 @@ def parse_numeros(groupes_str: Any) -> List[int]:
 
 def analyser_groupes(groupes_str: Any) -> str:
     nums = parse_numeros(groupes_str)
+    has_exception = any(n in EXCEPTION_OK_IF_CLASS_ONLY for n in nums)
+
     filieres = [n for n in nums if n in OFFICIEL and OFFICIEL[n][1] == "Filière"]
     classes  = [n for n in nums if n in OFFICIEL and OFFICIEL[n][1] == "Classe"]
 
+    # Cas "rien d'officiel"
     if len(filieres) == 0 and len(classes) == 0:
         return "Pas de classe ni de filière"
+
+    # Cas "classe mais pas de filière" → exception possible
     if len(filieres) == 0 and len(classes) > 0:
+        if has_exception:
+            return "OK"  # traité comme OK (exception)
         return "Pas de filière"
+
+    # Cas "filière mais pas de classe"
     if len(classes) == 0 and len(filieres) > 0:
         return "Pas de classe"
+
+    # Multiplicités
     if len(filieres) > 1 and len(classes) > 1:
         return "Plusieurs filières et plusieurs classes"
     if len(filieres) > 1:
@@ -81,6 +97,7 @@ def analyser_groupes(groupes_str: Any) -> str:
     if len(classes) > 1:
         return "Plusieurs classes"
 
+    # Cohérence filière/classe
     filiere_nom = OFFICIEL[filieres[0]][0]
     classe_nom  = OFFICIEL[classes[0]][0]
     if filiere_nom != classe_nom:
@@ -133,7 +150,7 @@ def detect_data_start(raw: pd.DataFrame, groupes_col_idx: int, header_row_idx: i
     Si rien n'est trouvé, retourne header_row_idx+1 (ancienne logique).
     """
     start_probe = header_row_idx + 1
-    max_probe = min(len(raw), header_row_idx + 50)  # on scanne 50 lignes max
+    max_probe = min(len(raw), header_row_idx + 50)
     for r in range(start_probe, max_probe):
         val = raw.iat[r, groupes_col_idx] if groupes_col_idx < raw.shape[1] else None
         if pd.notna(val) and str(val).strip() != "":
@@ -197,7 +214,7 @@ data.columns = headers
 GROUPES_COL_NAME = "Groupes (détecté I3/auto)"
 data[GROUPES_COL_NAME] = raw.iloc[start_row_idx:, groupes_col_idx].reset_index(drop=True)
 
-# Sanity check: la colonne Groupes paraît-elle vide ?
+# Sanity check
 digits4 = data[GROUPES_COL_NAME].astype(str).str.count(r"\d{4,}").sum()
 if digits4 == 0:
     st.warning("⚠️ La colonne **Groupes** semble vide ou mal alignée. "
@@ -286,5 +303,6 @@ st.markdown("""
 **Rappels :**  
 - Auto-détection de la première ligne de données sous I3 (tu peux aussi forcer une ligne de départ dans la sidebar).  
 - Si la colonne Groupes paraît vide, l’app te le signale avec un aperçu pour corriger facilement.  
+- Les codes d’**exception** marqués rendent **OK** le cas “classe sans filière”.  
 - Export erreurs = **Nom, Prénom, Diagnostic** (UTF-8-SIG, `;` activable).
 """)
