@@ -24,8 +24,18 @@ st.caption("Repère I3 comme libellé, détecte automatiquement la première lig
 OFFICIEL: Dict[int, Tuple[str, str]] = {
     5944: ("USPN", "Classe"), 5943: ("USPN", "Classe"), 5942: ("USPN", "Classe"),
     5018: ("USPN", "Filière"), 5017: ("USPN", "Filière"), 5016: ("USPN", "Filière"),
-    5935: ("PASS UPC", "Classe"), 5934: ("PASS UPC", "Classe"), 5933: ("PASS UPC", "Classe"), 5932: ("PASS UPC", "Classe"),
-    5013: ("PASS UPC", "Filière"), 5012: ("PASS UPC", "Filière"),
+
+    # PASS - UPC 25/26
+    5935: ("PASS - UPC 25/26", "Classe"),
+    5934: ("PASS - UPC 25/26", "Classe"),
+    5933: ("PASS - UPC 25/26", "Classe"),
+    5932: ("PASS - UPC 25/26", "Classe"),
+    5012: ("PASS - UPC 25/26", "Filière"),
+
+    # LAS - UPC 25/26
+    5931: ("LAS - UPC 25/26", "Classe"),
+    5013: ("LAS - UPC 25/26", "Filière"),
+
     5940: ("PASS SU", "Classe"), 5939: ("PASS SU", "Classe"), 5938: ("PASS SU", "Classe"), 5937: ("PASS SU", "Classe"), 5936: ("PASS SU", "Classe"),
     5014: ("PASS SU", "Filière"),
     5941: ("PASS UVSQ", "Classe"), 5015: ("PASS UVSQ", "Filière"),
