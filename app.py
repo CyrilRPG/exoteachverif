@@ -1,4 +1,4 @@
-# app.py — 2 en 1 : Vérification + Générateur PDF de listes par filière/classes
+# app.py — Vérification I3/I4+ + PDF par filière/classes (cohérence par mapping)
 import json
 import re
 from typing import List, Tuple, Dict, Any, Optional, Set, DefaultDict
@@ -28,81 +28,130 @@ small.dim { color:#6b7280; }
 
 st.title("Vérification des groupes étudiants — format I3/I4+ & Générateur PDF")
 
-# ---------------------- Référentiel officiel (complet) ----------------------
-# IMPORTANT : ce mapping suit le "rappel" que tu viens de donner.
-OFFICIEL: Dict[int, Tuple[str, str]] = {
+# ==================== RÉFÉRENTIEL (FILIERES ↔ CLASSES) ====================
+# Noms exacts (ceux que tu as fournis)
+FILIERE_NAMES: Dict[int, str] = {
     # USPN
-    5931: ("USPN - Classe 1 (LAS) 25/26", "Classe"),
-    5943: ("USPN - Classe 2 (PASS/LSPS) 25/26", "Classe"),
-    5942: ("USPN - Classe 1 (PASS/LSPS) 25/26", "Classe"),
-    5018: ("LSPS - USPN 25/26", "Filière"),
-    5017: ("PASS - USPN 25/26", "Filière"),
-    5016: ("LAS - USPN 25/26", "Filière"),
-
+    5016: "LAS - USPN 25/26",
+    5017: "PASS - USPN 25/26",
+    5018: "LSPS - USPN 25/26",
     # UPC
-    5935: ("PASS UPC - Classe 4 25/26", "Classe"),
-    5934: ("PASS UPC - Classe 3 25/26", "Classe"),
-    5933: ("PASS UPC - Classe 2 25/26", "Classe"),
-    5932: ("PASS UPC - Classe 1 25/26", "Classe"),
-    5013: ("LAS - UPC 25/26", "Filière"),
-    5012: ("PASS - UPC 25/26", "Filière"),
-
+    5012: "PASS - UPC 25/26",
+    5013: "LAS - UPC 25/26",
     # SU
-    5940: ("PASS SU - Classe 5 (Mineure Sciences) 25/26", "Classe"),
-    5939: ("PASS SU - Classe 4 (Mineure Lettres) 25/26", "Classe"),
-    5938: ("PASS SU - Classe 3 (Mineure Sciences) 25/26", "Classe"),
-    5937: ("PASS SU - Classe 2 (Mineure Sciences) 25/26", "Classe"),
-    5936: ("PASS SU - Classe 1 (Mineure Sciences) 25/26", "Classe"),
-    5014: ("PASS - SU (TC) 25/26", "Filière"),
-
+    5014: "PASS - SU (TC) 25/26",
     # UVSQ
-    5941: ("PASS UVSQ - Classe 1 25/26", "Classe"),
-    5015: ("PASS - UVSQ 25/26", "Filière"),
-
+    5015: "PASS - UVSQ 25/26",
     # UPS
-    5945: ("PASS UPS - Classe 1 25/26", "Classe"),
-    5019: ("PASS - UPS 25/26", "Filière"),
-
+    5019: "PASS - UPS 25/26",
     # UPEC
-    5953: ("LSPS2 UPEC - Classe 3 (25-26)", "Classe"),
-    5952: ("LSPS2 UPEC - Classe 2 (25-26)", "Classe"),
-    5951: ("LSPS2 UPEC - Classe 1 (25-26)", "Classe"),
-    5950: ("LSPS1 UPEC - Classe 4 25/26", "Classe"),
-    5949: ("LSPS1 UPEC - Classe 3 25/26", "Classe"),
-    5948: ("LSPS1 UPEC - Classe 2 25/26", "Classe"),
-    5947: ("LSPS1 UPEC - Classe 1 25-26", "Classe"),
-    5946: ("LAS1 Majeure disciplinaire - UPEC - Classe 1 25/26", "Classe"),
-    5032: ("LSPS3 - UPEC - 25-26", "Filière"),
-    5022: ("LSPS2 - UPEC 25-26", "Filière"),
-    5021: ("LSPS1 - UPEC 25-26", "Filière"),
-    5020: ("LAS1 Majeure disciplinaire - UPEC 25/26", "Filière"),
-
+    5020: "LAS1 Majeure disciplinaire - UPEC 25/26",
+    5021: "LSPS1 - UPEC 25-26",
+    5022: "LSPS2 - UPEC 25-26",
+    5032: "LSPS3 - UPEC - 25-26",
     # PAES
-    6127: ("PAES Distanciel - Classe 1 25/26", "Classe"),
-    6125: ("PAES Présentiel - Classe 4 25/26", "Classe"),
-    6124: ("PAES Présentiel - Classe 2 25/26", "Classe"),
-    6123: ("PAES Présentiel - Classe 3 25/26", "Classe"),
-    6122: ("PAES Présentiel - Classe 1 25/26", "Classe"),
-    5024: ("PAES - Distanciel 25-26", "Filière"),
-    5023: ("PAES - Présentiel 25-26", "Filière"),
-
+    5023: "PAES - Présentiel 25-26",
+    5024: "PAES - Distanciel 25-26",
     # Terminale Santé
-    6120: ("Terminale Santé Distanciel - Classe 1 25/26", "Classe"),
-    6119: ("Terminale Santé Présentiel - Classe 8 25/26", "Classe"),
-    6118: ("Terminale Santé Présentiel - Classe 7 25/26", "Classe"),
-    6117: ("Terminale Santé Présentiel - Classe 6 25/26", "Classe"),
-    6116: ("Terminale Santé Présentiel - Classe 5 25/26", "Classe"),
-    6115: ("Terminale Santé Présentiel - Classe 4 25/26", "Classe"),
-    6114: ("Terminale Santé Présentiel - Classe 3 25/26", "Classe"),
-    6113: ("Terminale Santé Présentiel - Classe 2 25/26", "Classe"),
-    6112: ("Terminale Santé Présentiel - Classe 1 25/26", "Classe"),
-    5026: ("Terminale Santé 25-26 - Distanciel", "Filière"),
-    5025: ("Terminale Santé 25-26 - Présentiel", "Filière"),
-
+    5025: "Terminale Santé 25-26 - Présentiel",
+    5026: "Terminale Santé 25-26 - Distanciel",
     # Première Élite
-    6128: ("Première Elite - Classe 1 25/26", "Classe"),
-    5027: ("Première Élite 25-26", "Filière"),
+    5027: "Première Élite 25-26",
 }
+
+CLASS_NAMES: Dict[int, str] = {
+    # USPN (classes)
+    5944: "USPN - Classe 1 (LAS) 25/26",
+    5943: "USPN - Classe 2 (PASS/LSPS) 25/26",
+    5942: "USPN - Classe 1 (PASS/LSPS) 25/26",
+    # UPC (PASS)
+    5935: "PASS UPC - Classe 4 25/26",
+    5934: "PASS UPC - Classe 3 25/26",
+    5933: "PASS UPC - Classe 2 25/26",
+    5932: "PASS UPC - Classe 1 25/26",
+    # UPC (LAS)
+    5931: "LAS UPC - Classe 1 25/26",
+    # SU
+    5940: "PASS SU - Classe 5 (Mineure Sciences) 25/26",
+    5939: "PASS SU - Classe 4 (Mineure Lettres) 25/26",
+    5938: "PASS SU - Classe 3 (Mineure Sciences) 25/26",
+    5937: "PASS SU - Classe 2 (Mineure Sciences) 25/26",
+    5936: "PASS SU - Classe 1 (Mineure Sciences) 25/26",
+    # UVSQ
+    5941: "PASS UVSQ - Classe 1 25/26",
+    # UPS
+    5945: "PASS UPS - Classe 1 25/26",
+    # UPEC
+    5953: "LSPS2 UPEC - Classe 3 (25-26)",
+    5952: "LSPS2 UPEC - Classe 2 (25-26)",
+    5951: "LSPS2 UPEC - Classe 1 (25-26)",
+    5950: "LSPS1 UPEC - Classe 4 25/26",
+    5949: "LSPS1 UPEC - Classe 3 25/26",
+    5948: "LSPS1 UPEC - Classe 2 25/26",
+    5947: "LSPS1 UPEC - Classe 1 25-26",
+    5946: "LAS1 Majeure disciplinaire - UPEC - Classe 1 25/26",
+    # PAES
+    6127: "PAES Distanciel - Classe 1 25/26",
+    6125: "PAES Présentiel - Classe 4 25/26",
+    6124: "PAES Présentiel - Classe 2 25/26",
+    6123: "PAES Présentiel - Classe 3 25/26",
+    6122: "PAES Présentiel - Classe 1 25/26",
+    # Terminale Santé
+    6120: "Terminale Santé Distanciel - Classe 1 25/26",
+    6119: "Terminale Santé Présentiel - Classe 8 25/26",
+    6118: "Terminale Santé Présentiel - Classe 7 25/26",
+    6117: "Terminale Santé Présentiel - Classe 6 25/26",
+    6116: "Terminale Santé Présentiel - Classe 5 25/26",
+    6115: "Terminale Santé Présentiel - Classe 4 25/26",
+    6114: "Terminale Santé Présentiel - Classe 3 25/26",
+    6113: "Terminale Santé Présentiel - Classe 2 25/26",
+    6112: "Terminale Santé Présentiel - Classe 1 25/26",
+    # Première Élite
+    6128: "Première Elite - Classe 1 25/26",
+}
+
+# FILIERE -> ENSEMBLE DES CLASSES AUTORISÉES
+FILIERE_TO_CLASSES: Dict[int, Set[int]] = {
+    # USPN
+    5016: {5944},           # LAS - USPN -> Classe 1 (LAS)
+    5017: {5942, 5943},     # PASS - USPN -> Classes PASS/LSPS
+    5018: {5942, 5943},     # LSPS - USPN -> Classes PASS/LSPS
+    # UPC
+    5012: {5932, 5933, 5934, 5935},  # PASS - UPC -> 1..4
+    5013: {5931},                    # LAS - UPC -> Classe 1
+    # SU
+    5014: {5936, 5937, 5938, 5939, 5940},  # PASS - SU
+    # UVSQ
+    5015: {5941},
+    # UPS
+    5019: {5945},
+    # UPEC
+    5020: {5946},                    # LAS1 MD UPEC
+    5021: {5947, 5948, 5949, 5950},  # LSPS1 UPEC
+    5022: {5951, 5952, 5953},        # LSPS2 UPEC
+    5032: set(),                     # LSPS3 UPEC (pas de classes listées)
+    # PAES
+    5023: {6122, 6123, 6124, 6125},  # Présentiel
+    5024: {6127},                    # Distanciel
+    # Terminale Santé
+    5025: {6112, 6113, 6114, 6115, 6116, 6117, 6118, 6119},  # Présentiel
+    5026: {6120},                    # Distanciel
+    # Première Élite
+    5027: {6128},
+}
+
+# CLASSE -> ENSEMBLE DES FILIÈRES POSSIBLES (inverse)
+CLASSES_TO_FILIERES: Dict[int, Set[int]] = defaultdict(set)
+for fil, cls_set in FILIERE_TO_CLASSES.items():
+    for c in cls_set:
+        CLASSES_TO_FILIERES[c].add(fil)
+
+# Table "officielle" codes -> (label, type) pour l'analyse
+OFFICIEL: Dict[int, Tuple[str, str]] = {}
+for f_code, f_name in FILIERE_NAMES.items():
+    OFFICIEL[f_code] = (f_name, "Filière")
+for c_code, c_name in CLASS_NAMES.items():
+    OFFICIEL[c_code] = (c_name, "Classe")
 
 # ---------- Exceptions : classe sans filière => OK ----------
 EXCEPTION_OK_IF_CLASS_ONLY: Set[int] = {
@@ -116,6 +165,7 @@ def parse_numeros(groupes_str: Any) -> List[int]:
         return []
     return [int(m.group(0)) for m in NUM_RE.finditer(str(groupes_str))]
 
+# ============================= ANALYSE =============================
 def analyser_groupes(groupes_str: Any) -> str:
     nums = parse_numeros(groupes_str)
     has_exception = any(n in EXCEPTION_OK_IF_CLASS_ONLY for n in nums)
@@ -128,7 +178,7 @@ def analyser_groupes(groupes_str: Any) -> str:
 
     if len(filieres) == 0 and len(classes) > 0:
         if has_exception:
-            return "OK"
+            return "OK"  # classe seule mais exception autorisée
         return "Pas de filière"
 
     if len(classes) == 0 and len(filieres) > 0:
@@ -141,11 +191,13 @@ def analyser_groupes(groupes_str: Any) -> str:
     if len(classes) > 1:
         return "Plusieurs classes"
 
-    filiere_nom = OFFICIEL[filieres[0]][0]
-    classe_nom  = OFFICIEL[classes[0]][0]
-    if filiere_nom != classe_nom:
+    # Ici: exactement 1 filière et 1 classe -> on vérifie l'appartenance par mapping
+    f = filieres[0]
+    c = classes[0]
+    if c in CLASSES_TO_FILIERES and f in CLASSES_TO_FILIERES[c]:
+        return "OK"
+    else:
         return "Classe et filière incohérents"
-    return "OK"
 
 def extra_info(groupes_str: Any) -> Dict[str, Any]:
     nums = parse_numeros(groupes_str)
@@ -153,8 +205,8 @@ def extra_info(groupes_str: Any) -> Dict[str, Any]:
     inconnus = [n for n in nums if n not in OFFICIEL]
     filieres = [n for n in nums if n in OFFICIEL and OFFICIEL[n][1]=="Filière"]
     classes  = [n for n in nums if n in OFFICIEL and OFFICIEL[n][1]=="Classe"]
-    filiere_label = f"{OFFICIEL[filieres[0]][0]} ({filieres[0]})" if len(filieres)==1 else None
-    classe_label = f"{OFFICIEL[classes[0]][0]} ({classes[0]})" if len(classes)==1 else None
+    filiere_label = FILIERE_NAMES[filieres[0]] if len(filieres)==1 and filieres[0] in FILIERE_NAMES else None
+    classe_label = CLASS_NAMES[classes[0]] if len(classes)==1 and classes[0] in CLASS_NAMES else None
     return {
         "NumerosTrouvés": nums,
         "NumerosConnus": connus,
@@ -163,6 +215,7 @@ def extra_info(groupes_str: Any) -> Dict[str, Any]:
         "ClasseDéduite": classe_label,
     }
 
+# ============================= IMPORT I3/I4+ =============================
 def excel_col_to_index(col_letter: str) -> int:
     col_letter = col_letter.strip().upper()
     total = 0
@@ -389,35 +442,47 @@ with tab_pdf:
     st.markdown("#### Aperçu (10 lignes)")
     st.dataframe(data.head(10), use_container_width=True)
 
-    # Prépare structure filière -> classes -> liste étudiants
-    def nom_filiere_etudiant(nums: List[int]) -> str:
-        # 0 filière
-        fil_codes = [n for n in nums if n in OFFICIEL and OFFICIEL[n][1] == "Filière"]
-        if len(fil_codes) == 0:
-            return "Sans filière (classe seule)"
-        if len(fil_codes) > 1:
-            return "Plusieurs filières"
-        return OFFICIEL[fil_codes[0]][0]
+    # Utilitaires pour affecter filière(s) et classes
+    def filieres_effectives(nums: List[int]) -> Set[int]:
+        """Filières explicites, ou déduites des classes si aucune filière présente."""
+        fs = {n for n in nums if n in FILIERE_NAMES}
+        if fs:
+            return fs
+        # déduit depuis les classes
+        cls = {n for n in nums if n in CLASS_NAMES}
+        derived: Set[int] = set()
+        for c in cls:
+            derived |= CLASSES_TO_FILIERES.get(c, set())
+        return derived if derived else set()
 
-    def nom_classes_etudiant(nums: List[int]) -> List[str]:
-        cls_codes = [n for n in nums if n in OFFICIEL and OFFICIEL[n][1] == "Classe"]
-        return [OFFICIEL[c][0] for c in cls_codes]
+    def classes_effectives_par_filiere(nums: List[int], fcode: int) -> Set[int]:
+        cls = {n for n in nums if n in CLASS_NAMES}
+        return {c for c in cls if c in FILIERE_TO_CLASSES.get(fcode, set())}
 
-    # Construction du regroupement
-    groups: DefaultDict[str, DefaultDict[str, list]] = defaultdict(lambda: defaultdict(list))
+    # Construction du regroupement filière -> classes -> [étudiants]
+    groups: DefaultDict[int, DefaultDict[int, list]] = defaultdict(lambda: defaultdict(list))
     for _, row in data.iterrows():
         nums = parse_numeros(row.get(GROUPES_COL_NAME))
-        filiere_name = nom_filiere_etudiant(nums)
-        class_names = nom_classes_etudiant(nums)
-        nom_v = "" if not nom_col_pdf else str(row.get(nom_col_pdf, "") or "")
-        prenom_v = "" if not prenom_col_pdf else str(row.get(prenom_col_pdf, "") or "")
-        tel_v = "" if not tel_col_pdf else str(row.get(tel_col_pdf, "") or "")
-        if not class_names:
-            # Pas de classe : on crée une pseudo-classe
-            groups[filiere_name]["(Sans classe)"].append((nom_v, prenom_v, tel_v))
-        else:
-            for cls in class_names:
-                groups[filiere_name][cls].append((nom_v, prenom_v, tel_v))
+        fs = filieres_effectives(nums)
+        if not fs:
+            # Classe(s) sans filière : crée un pseudo-groupe -1
+            fs = {-1}
+        for fcode in fs:
+            if fcode == -1:
+                # sans filière, ranger les classes trouvées (si aucune -> (Sans classe))
+                class_set = {n for n in nums if n in CLASS_NAMES}
+                if not class_set:
+                    groups[-1][-1].append(row)
+                else:
+                    for c in class_set:
+                        groups[-1][c].append(row)
+            else:
+                cls_for_f = classes_effectives_par_filiere(nums, fcode)
+                if not cls_for_f:
+                    groups[fcode][-1].append(row)  # pas de classe pour cette filière
+                else:
+                    for c in cls_for_f:
+                        groups[fcode][c].append(row)
 
     # Génération du PDF
     if st.button("🧾 Générer le PDF des listes"):
@@ -432,17 +497,39 @@ with tab_pdf:
 
             elements = []
 
-            # Tri des filières puis des classes
-            for filiere in sorted(groups.keys(), key=lambda x: (x.startswith("Sans filière"), x.startswith("Plusieurs filières"), x)):
-                elements.append(Paragraph(filiere, title_style))
+            # Tri des filières : -1 ("Sans filière") à la fin
+            ordered_filieres = [f for f in sorted(groups.keys()) if f != -1]
+            if -1 in groups:
+                ordered_filieres.append(-1)
+
+            for fcode in ordered_filieres:
+                if fcode == -1:
+                    filiere_title = "Sans filière (classe seule)"
+                else:
+                    filiere_title = FILIERE_NAMES.get(fcode, f"Filière {fcode}")
+                elements.append(Paragraph(filiere_title, title_style))
                 elements.append(Spacer(1, 6))
 
-                classes_map = groups[filiere]
-                for cls in sorted(classes_map.keys()):
-                    elements.append(Paragraph(cls, class_style))
+                classes_map = groups[fcode]
+                # Trier classes : -1 ("Sans classe") après les vraies classes
+                ordered_classes = [c for c in sorted(classes_map.keys()) if c != -1]
+                if -1 in classes_map:
+                    ordered_classes.append(-1)
+
+                for ccode in ordered_classes:
+                    class_title = "(Sans classe)" if ccode == -1 else CLASS_NAMES.get(ccode, f"Classe {ccode}")
+                    elements.append(Paragraph(class_title, class_style))
                     data_rows = [["Nom", "Prénom", "Téléphone"]]
-                    # tri par Nom puis Prénom
-                    for nom_v, prenom_v, tel_v in sorted(classes_map[cls], key=lambda t: (t[0].lower(), t[1].lower())):
+
+                    # Tri par Nom puis Prénom
+                    rows = classes_map[ccode]
+                    def get_val(r: pd.Series, col: Optional[str]) -> str:
+                        return "" if not col else str(r.get(col, "") or "")
+                    rows_sorted = sorted(rows, key=lambda r: (get_val(r, nom_col_pdf).lower(), get_val(r, prenom_col_pdf).lower()))
+                    for r in rows_sorted:
+                        nom_v = get_val(r, nom_col_pdf)
+                        prenom_v = get_val(r, prenom_col_pdf)
+                        tel_v = get_val(r, tel_col_pdf)
                         data_rows.append([nom_v, prenom_v, tel_v])
 
                     tbl = Table(data_rows, colWidths=[200, 200, 100])
