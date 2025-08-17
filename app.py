@@ -1,4 +1,4 @@
-# app.py — Vérification I3/I4+ + PDF par filière/classes (cohérence par mapping)
+# app.py — Vérification I3/I4+ + PDF (1 page = 1 classe, sans filières)
 import json
 import re
 from typing import List, Tuple, Dict, Any, Optional, Set, DefaultDict
@@ -12,7 +12,7 @@ import streamlit as st
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether
 
 # ------------------------------- UI / THEME -------------------------------
 st.set_page_config(page_title="Vérif Groupes Étudiants — I3/I4+ & PDF", page_icon="✅", layout="wide")
@@ -29,7 +29,6 @@ small.dim { color:#6b7280; }
 st.title("Vérification des groupes étudiants — format I3/I4+ & Générateur PDF")
 
 # ==================== RÉFÉRENTIEL (FILIERES ↔ CLASSES) ====================
-# Noms exacts (ceux que tu as fournis)
 FILIERE_NAMES: Dict[int, str] = {
     # USPN
     5016: "LAS - USPN 25/26",
@@ -60,7 +59,7 @@ FILIERE_NAMES: Dict[int, str] = {
 }
 
 CLASS_NAMES: Dict[int, str] = {
-    # USPN (classes)
+    # USPN (classes) — LAS 1 corrigé = 5944
     5944: "USPN - Classe 1 (LAS) 25/26",
     5943: "USPN - Classe 2 (PASS/LSPS) 25/26",
     5942: "USPN - Classe 1 (PASS/LSPS) 25/26",
@@ -110,43 +109,43 @@ CLASS_NAMES: Dict[int, str] = {
     6128: "Première Elite - Classe 1 25/26",
 }
 
-# FILIERE -> ENSEMBLE DES CLASSES AUTORISÉES
+# FILIERE -> CLASSES autorisées
 FILIERE_TO_CLASSES: Dict[int, Set[int]] = {
     # USPN
     5016: {5944},           # LAS - USPN -> Classe 1 (LAS)
     5017: {5942, 5943},     # PASS - USPN -> Classes PASS/LSPS
     5018: {5942, 5943},     # LSPS - USPN -> Classes PASS/LSPS
     # UPC
-    5012: {5932, 5933, 5934, 5935},  # PASS - UPC -> 1..4
-    5013: {5931},                    # LAS - UPC -> Classe 1
+    5012: {5932, 5933, 5934, 5935},  # PASS - UPC
+    5013: {5931},                    # LAS - UPC
     # SU
-    5014: {5936, 5937, 5938, 5939, 5940},  # PASS - SU
+    5014: {5936, 5937, 5938, 5939, 5940},
     # UVSQ
     5015: {5941},
     # UPS
     5019: {5945},
     # UPEC
-    5020: {5946},                    # LAS1 MD UPEC
-    5021: {5947, 5948, 5949, 5950},  # LSPS1 UPEC
-    5022: {5951, 5952, 5953},        # LSPS2 UPEC
-    5032: set(),                     # LSPS3 UPEC (pas de classes listées)
+    5020: {5946},
+    5021: {5947, 5948, 5949, 5950},
+    5022: {5951, 5952, 5953},
+    5032: set(),
     # PAES
-    5023: {6122, 6123, 6124, 6125},  # Présentiel
-    5024: {6127},                    # Distanciel
+    5023: {6122, 6123, 6124, 6125},
+    5024: {6127},
     # Terminale Santé
-    5025: {6112, 6113, 6114, 6115, 6116, 6117, 6118, 6119},  # Présentiel
-    5026: {6120},                    # Distanciel
+    5025: {6112, 6113, 6114, 6115, 6116, 6117, 6118, 6119},
+    5026: {6120},
     # Première Élite
     5027: {6128},
 }
 
-# CLASSE -> ENSEMBLE DES FILIÈRES POSSIBLES (inverse)
+# CLASSE -> FILIERES (inverse)
 CLASSES_TO_FILIERES: Dict[int, Set[int]] = defaultdict(set)
-for fil, cls_set in FILIERE_TO_CLASSES.items():
+for fcode, cls_set in FILIERE_TO_CLASSES.items():
     for c in cls_set:
-        CLASSES_TO_FILIERES[c].add(fil)
+        CLASSES_TO_FILIERES[c].add(fcode)
 
-# Table "officielle" codes -> (label, type) pour l'analyse
+# OFFICIEL (tous codes)
 OFFICIEL: Dict[int, Tuple[str, str]] = {}
 for f_code, f_name in FILIERE_NAMES.items():
     OFFICIEL[f_code] = (f_name, "Filière")
@@ -191,7 +190,7 @@ def analyser_groupes(groupes_str: Any) -> str:
     if len(classes) > 1:
         return "Plusieurs classes"
 
-    # Ici: exactement 1 filière et 1 classe -> on vérifie l'appartenance par mapping
+    # 1 filière et 1 classe -> vérifie appartenance par mapping
     f = filieres[0]
     c = classes[0]
     if c in CLASSES_TO_FILIERES and f in CLASSES_TO_FILIERES[c]:
@@ -327,7 +326,7 @@ if digits4 == 0:
     st.write(data[GROUPES_COL_NAME].head(10))
 
 # --------------------------- Onglets ---------------------------
-tab_verif, tab_pdf = st.tabs(["✅ Vérification", "🧾 Listes PDF par filière & classes"])
+tab_verif, tab_pdf = st.tabs(["✅ Vérification", "🧾 Listes PDF (1 page = 1 classe)"])
 
 # =========================
 # Onglet 1 : Vérification
@@ -413,7 +412,7 @@ with tab_verif:
                            file_name="erreurs_groupes.csv", mime="text/csv", key="csv_erreurs")
 
 # =========================
-# Onglet 2 : PDF Listes
+# Onglet 2 : PDF (1 page = 1 classe, sans filières)
 # =========================
 with tab_pdf:
     st.subheader("Paramètres colonnes (PDF)")
@@ -436,118 +435,79 @@ with tab_pdf:
     prenom_col_pdf = None if prenom_col_pdf == "—" else prenom_col_pdf
     tel_col_pdf = None if tel_col_pdf == "—" else tel_col_pdf
 
-    if not nom_col_pdf or not prenom_col_pdf:
-        st.warning("⚠️ Merci de définir **Nom** et **Prénom** pour construire le PDF.")
-
     st.markdown("#### Aperçu (10 lignes)")
     st.dataframe(data.head(10), use_container_width=True)
 
-    # Utilitaires pour affecter filière(s) et classes
-    def filieres_effectives(nums: List[int]) -> Set[int]:
-        """Filières explicites, ou déduites des classes si aucune filière présente."""
-        fs = {n for n in nums if n in FILIERE_NAMES}
-        if fs:
-            return fs
-        # déduit depuis les classes
-        cls = {n for n in nums if n in CLASS_NAMES}
-        derived: Set[int] = set()
-        for c in cls:
-            derived |= CLASSES_TO_FILIERES.get(c, set())
-        return derived if derived else set()
+    # Préparer : classes -> liste d'étudiants (Nom, Prénom, Téléphone)
+    # On récupère toutes les classes connues dans les données, indépendamment de la filière.
+    classes_to_students: Dict[int, list] = defaultdict(list)
 
-    def classes_effectives_par_filiere(nums: List[int], fcode: int) -> Set[int]:
-        cls = {n for n in nums if n in CLASS_NAMES}
-        return {c for c in cls if c in FILIERE_TO_CLASSES.get(fcode, set())}
+    def classes_for_row(nums: List[int]) -> Set[int]:
+        return {n for n in nums if n in CLASS_NAMES}
 
-    # Construction du regroupement filière -> classes -> [étudiants]
-    groups: DefaultDict[int, DefaultDict[int, list]] = defaultdict(lambda: defaultdict(list))
     for _, row in data.iterrows():
         nums = parse_numeros(row.get(GROUPES_COL_NAME))
-        fs = filieres_effectives(nums)
-        if not fs:
-            # Classe(s) sans filière : crée un pseudo-groupe -1
-            fs = {-1}
-        for fcode in fs:
-            if fcode == -1:
-                # sans filière, ranger les classes trouvées (si aucune -> (Sans classe))
-                class_set = {n for n in nums if n in CLASS_NAMES}
-                if not class_set:
-                    groups[-1][-1].append(row)
-                else:
-                    for c in class_set:
-                        groups[-1][c].append(row)
-            else:
-                cls_for_f = classes_effectives_par_filiere(nums, fcode)
-                if not cls_for_f:
-                    groups[fcode][-1].append(row)  # pas de classe pour cette filière
-                else:
-                    for c in cls_for_f:
-                        groups[fcode][c].append(row)
+        cls = classes_for_row(nums)
+        # si aucun code classe détecté, on ignore pour le PDF "1 page = 1 classe"
+        if not cls:
+            continue
+        nom_v = "" if not nom_col_pdf else str(row.get(nom_col_pdf, "") or "")
+        prenom_v = "" if not prenom_col_pdf else str(row.get(prenom_col_pdf, "") or "")
+        tel_v = "" if not tel_col_pdf else str(row.get(tel_col_pdf, "") or "")
+        for c in cls:
+            classes_to_students[c].append((nom_v, prenom_v, tel_v))
 
-    # Génération du PDF
-    if st.button("🧾 Générer le PDF des listes"):
+    # Génération du PDF : 1 page = 1 classe, police petite, max 40 élèves/page
+    if st.button("🧾 Générer le PDF (1 page = 1 classe)"):
         if not nom_col_pdf or not prenom_col_pdf:
             st.error("Sélectionne d'abord **Nom** et **Prénom**.")
         else:
             buffer = io.BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
+            # allowSplitting=False : évite les tableaux scindés
+            doc = SimpleDocTemplate(
+                buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36,
+                title="Listes par classe", author="Auto"
+            )
             styles = getSampleStyleSheet()
-            title_style = ParagraphStyle("FiliereTitle", parent=styles["Heading1"], fontSize=20, leading=24, spaceAfter=12)
-            class_style = ParagraphStyle("ClassTitle", parent=styles["Heading2"], fontSize=16, leading=20, spaceBefore=6, spaceAfter=6)
+            class_style = ParagraphStyle("ClassTitle", parent=styles["Heading1"], fontSize=16, leading=19, spaceAfter=8)
 
             elements = []
 
-            # Tri des filières : -1 ("Sans filière") à la fin
-            ordered_filieres = [f for f in sorted(groups.keys()) if f != -1]
-            if -1 in groups:
-                ordered_filieres.append(-1)
+            # tri des classes par libellé (lisible)
+            ordered_classes = sorted(classes_to_students.keys(), key=lambda c: CLASS_NAMES.get(c, str(c)))
 
-            for fcode in ordered_filieres:
-                if fcode == -1:
-                    filiere_title = "Sans filière (classe seule)"
-                else:
-                    filiere_title = FILIERE_NAMES.get(fcode, f"Filière {fcode}")
-                elements.append(Paragraph(filiere_title, title_style))
-                elements.append(Spacer(1, 6))
+            for ccode in ordered_classes:
+                class_title = CLASS_NAMES.get(ccode, f"Classe {ccode}")
+                # tri des étudiants par Nom puis Prénom
+                rows_sorted = sorted(classes_to_students[ccode], key=lambda t: ((t[0] or "").lower(), (t[1] or "").lower()))
+                # contrainte 40 max par page
+                page_rows = rows_sorted[:40]
 
-                classes_map = groups[fcode]
-                # Trier classes : -1 ("Sans classe") après les vraies classes
-                ordered_classes = [c for c in sorted(classes_map.keys()) if c != -1]
-                if -1 in classes_map:
-                    ordered_classes.append(-1)
+                # Titre de la classe (pas de filière affichée)
+                page_block = []
+                page_block.append(Paragraph(class_title, class_style))
+                page_block.append(Spacer(1, 6))
 
-                for ccode in ordered_classes:
-                    class_title = "(Sans classe)" if ccode == -1 else CLASS_NAMES.get(ccode, f"Classe {ccode}")
-                    elements.append(Paragraph(class_title, class_style))
-                    data_rows = [["Nom", "Prénom", "Téléphone"]]
+                data_rows = [["Nom", "Prénom", "Téléphone"]]
+                data_rows += [[n, p, t] for (n, p, t) in page_rows]
 
-                    # Tri par Nom puis Prénom
-                    rows = classes_map[ccode]
-                    def get_val(r: pd.Series, col: Optional[str]) -> str:
-                        return "" if not col else str(r.get(col, "") or "")
-                    rows_sorted = sorted(rows, key=lambda r: (get_val(r, nom_col_pdf).lower(), get_val(r, prenom_col_pdf).lower()))
-                    for r in rows_sorted:
-                        nom_v = get_val(r, nom_col_pdf)
-                        prenom_v = get_val(r, prenom_col_pdf)
-                        tel_v = get_val(r, tel_col_pdf)
-                        data_rows.append([nom_v, prenom_v, tel_v])
+                # largeurs pour tenir sur A4 (36+36 marges -> ~523 pts dispo)
+                tbl = Table(data_rows, colWidths=[220, 220, 83])
+                tbl.setStyle(TableStyle([
+                    ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                    ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                    ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+                    ("ALIGN", (0,0), (-1,0), "CENTER"),
+                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                    ("FONTSIZE", (0,0), (-1,-1), 9),  # petite police pour tenir sur 1 page
+                    ("BOTTOMPADDING", (0,0), (-1,0), 5),
+                    ("TOPPADDING", (0,1), (-1,-1), 3),
+                    ("BOTTOMPADDING", (0,1), (-1,-1), 3),
+                ]))
+                page_block.append(tbl)
 
-                    tbl = Table(data_rows, colWidths=[200, 200, 100])
-                    tbl.setStyle(TableStyle([
-                        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-                        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
-                        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-                        ("ALIGN", (0,0), (-1,0), "CENTER"),
-                        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                        ("FONTSIZE", (0,0), (-1,-1), 10),
-                        ("BOTTOMPADDING", (0,0), (-1,0), 6),
-                        ("TOPPADDING", (0,1), (-1,-1), 4),
-                        ("BOTTOMPADDING", (0,1), (-1,-1), 4),
-                    ]))
-                    elements.append(tbl)
-                    elements.append(Spacer(1, 10))
-
-                # saut de page entre filières
+                # encapsule et force 1 page par classe
+                elements.append(KeepTogether(page_block))
                 elements.append(PageBreak())
 
             # Enlève la dernière page blanche si besoin
@@ -556,4 +516,5 @@ with tab_pdf:
 
             doc.build(elements)
             buffer.seek(0)
-            st.download_button("⬇️ Télécharger le PDF", data=buffer, file_name="listes_filieres_classes.pdf", mime="application/pdf", key="pdf_download")
+            st.download_button("⬇️ Télécharger le PDF", data=buffer, file_name="listes_par_classe.pdf",
+                               mime="application/pdf", key="pdf_download_classes")
