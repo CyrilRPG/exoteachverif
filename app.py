@@ -1,4 +1,4 @@
-# app.py — Vérification I3/I4+ + PDF (1 page = 1 classe, sans filières)
+# app.py — Vérification I3/I4+ + PDF (1 page = 1 classe, jusqu'à 42 élèves)
 import json
 import re
 from typing import List, Tuple, Dict, Any, Optional, Set, DefaultDict
@@ -412,7 +412,7 @@ with tab_verif:
                            file_name="erreurs_groupes.csv", mime="text/csv", key="csv_erreurs")
 
 # =========================
-# Onglet 2 : PDF (1 page = 1 classe, sans filières)
+# Onglet 2 : PDF (1 page = 1 classe, jusqu'à 42 élèves)
 # =========================
 with tab_pdf:
     st.subheader("Paramètres colonnes (PDF)")
@@ -439,7 +439,6 @@ with tab_pdf:
     st.dataframe(data.head(10), use_container_width=True)
 
     # Préparer : classes -> liste d'étudiants (Nom, Prénom, Téléphone)
-    # On récupère toutes les classes connues dans les données, indépendamment de la filière.
     classes_to_students: Dict[int, list] = defaultdict(list)
 
     def classes_for_row(nums: List[int]) -> Set[int]:
@@ -448,7 +447,6 @@ with tab_pdf:
     for _, row in data.iterrows():
         nums = parse_numeros(row.get(GROUPES_COL_NAME))
         cls = classes_for_row(nums)
-        # si aucun code classe détecté, on ignore pour le PDF "1 page = 1 classe"
         if not cls:
             continue
         nom_v = "" if not nom_col_pdf else str(row.get(nom_col_pdf, "") or "")
@@ -457,13 +455,14 @@ with tab_pdf:
         for c in cls:
             classes_to_students[c].append((nom_v, prenom_v, tel_v))
 
-    # Génération du PDF : 1 page = 1 classe, police petite, max 40 élèves/page
-    if st.button("🧾 Générer le PDF (1 page = 1 classe)"):
+    # Génération du PDF : 1 page = 1 classe, police petite, max 42 élèves/page
+    MAX_PER_PAGE = 42
+
+    if st.button("🧾 Générer le PDF (1 page = 1 classe, 42 élèves max)"):
         if not nom_col_pdf or not prenom_col_pdf:
             st.error("Sélectionne d'abord **Nom** et **Prénom**.")
         else:
             buffer = io.BytesIO()
-            # allowSplitting=False : évite les tableaux scindés
             doc = SimpleDocTemplate(
                 buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36,
                 title="Listes par classe", author="Auto"
@@ -473,17 +472,13 @@ with tab_pdf:
 
             elements = []
 
-            # tri des classes par libellé (lisible)
             ordered_classes = sorted(classes_to_students.keys(), key=lambda c: CLASS_NAMES.get(c, str(c)))
 
             for ccode in ordered_classes:
                 class_title = CLASS_NAMES.get(ccode, f"Classe {ccode}")
-                # tri des étudiants par Nom puis Prénom
                 rows_sorted = sorted(classes_to_students[ccode], key=lambda t: ((t[0] or "").lower(), (t[1] or "").lower()))
-                # contrainte 40 max par page
-                page_rows = rows_sorted[:40]
+                page_rows = rows_sorted[:MAX_PER_PAGE]  # <= 42 élèves
 
-                # Titre de la classe (pas de filière affichée)
                 page_block = []
                 page_block.append(Paragraph(class_title, class_style))
                 page_block.append(Spacer(1, 6))
@@ -491,7 +486,7 @@ with tab_pdf:
                 data_rows = [["Nom", "Prénom", "Téléphone"]]
                 data_rows += [[n, p, t] for (n, p, t) in page_rows]
 
-                # largeurs pour tenir sur A4 (36+36 marges -> ~523 pts dispo)
+                # Largeurs adaptées A4; petite police pour tenir 42 lignes
                 tbl = Table(data_rows, colWidths=[220, 220, 83])
                 tbl.setStyle(TableStyle([
                     ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
@@ -499,18 +494,16 @@ with tab_pdf:
                     ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
                     ("ALIGN", (0,0), (-1,0), "CENTER"),
                     ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                    ("FONTSIZE", (0,0), (-1,-1), 9),  # petite police pour tenir sur 1 page
-                    ("BOTTOMPADDING", (0,0), (-1,0), 5),
-                    ("TOPPADDING", (0,1), (-1,-1), 3),
-                    ("BOTTOMPADDING", (0,1), (-1,-1), 3),
+                    ("FONTSIZE", (0,0), (-1,-1), 9),
+                    ("BOTTOMPADDING", (0,0), (-1,0), 4),
+                    ("TOPPADDING", (0,1), (-1,-1), 2),
+                    ("BOTTOMPADDING", (0,1), (-1,-1), 2),
                 ]))
                 page_block.append(tbl)
 
-                # encapsule et force 1 page par classe
                 elements.append(KeepTogether(page_block))
                 elements.append(PageBreak())
 
-            # Enlève la dernière page blanche si besoin
             if elements and isinstance(elements[-1], PageBreak):
                 elements = elements[:-1]
 
