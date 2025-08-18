@@ -1,7 +1,7 @@
-# app.py — Vérification I3/I4+ + Export Excel (1 onglet = 1 classe)
+# app.py — Vérification I3/I4+ + Export Excel (1 onglet = 1 classe, avec 2 colonnes vides)
 import json
 import re
-from typing import List, Tuple, Dict, Any, Optional, Set, DefaultDict
+from typing import List, Tuple, Dict, Any, Optional, Set
 from collections import defaultdict
 import io
 import unicodedata
@@ -54,7 +54,7 @@ FILIERE_NAMES: Dict[int, str] = {
 }
 
 CLASS_NAMES: Dict[int, str] = {
-    # USPN (classes) — LAS 1 corrigé = 5944
+    # USPN (classes) — LAS 1 = 5944
     5944: "USPN - Classe 1 (LAS) 25/26",
     5943: "USPN - Classe 2 (PASS/LSPS) 25/26",
     5942: "USPN - Classe 1 (PASS/LSPS) 25/26",
@@ -134,20 +134,21 @@ FILIERE_TO_CLASSES: Dict[int, Set[int]] = {
     5027: {6128},
 }
 
-# CLASSE -> FILIERES (inverse)
+# Inverse : CLASSE -> FILIERES
+from collections import defaultdict
 CLASSES_TO_FILIERES: Dict[int, Set[int]] = defaultdict(set)
 for fcode, cls_set in FILIERE_TO_CLASSES.items():
     for c in cls_set:
         CLASSES_TO_FILIERES[c].add(fcode)
 
-# OFFICIEL (tous codes)
+# OFFICIEL (tous codes) pour la détection dans la colonne Groupes
 OFFICIEL: Dict[int, Tuple[str, str]] = {}
 for f_code, f_name in FILIERE_NAMES.items():
     OFFICIEL[f_code] = (f_name, "Filière")
 for c_code, c_name in CLASS_NAMES.items():
     OFFICIEL[c_code] = (c_name, "Classe")
 
-# ---------- Exceptions : classe sans filière => OK ----------
+# ---------- Exceptions : classe sans filière => OK (vérification) & exclus de l'Excel ----------
 EXCEPTION_OK_IF_CLASS_ONLY: Set[int] = {
     4538, 4537, 4388, 4386, 4385, 4384, 4383, 4382, 4381, 4380, 4379, 4378, 4377, 4376, 4375
 }
@@ -172,7 +173,7 @@ def analyser_groupes(groupes_str: Any) -> str:
 
     if len(filieres) == 0 and len(classes) > 0:
         if has_exception:
-            return "OK"  # classe seule mais exception autorisée
+            return "OK"  # autorisé si classe seule ET code exception
         return "Pas de filière"
 
     if len(classes) == 0 and len(filieres) > 0:
@@ -286,12 +287,11 @@ except Exception as e:
 st.write(f"**Onglet lu:** `{sheet_name}`")
 
 # --- I3 / headers / data cut ---
-header_row_idx = 2
+header_row_idx = 2  # I3
 try:
     groupes_col_idx = excel_col_to_index(col_letter_override or "I")
 except Exception:
-    groupes_col_idx = 8
-
+    groupes_col_idx = 8  # I
 if header_row_idx >= len(raw):
     st.error("La ligne d'en-tête (3) n'existe pas dans ce fichier.")
     st.stop()
@@ -313,6 +313,7 @@ data.columns = headers
 GROUPES_COL_NAME = "Groupes (détecté I3/auto)"
 data[GROUPES_COL_NAME] = raw.iloc[start_row_idx:, groupes_col_idx].reset_index(drop=True)
 
+# Sanity
 digits4 = data[GROUPES_COL_NAME].astype(str).str.count(r"\d{4,}").sum()
 if digits4 == 0:
     st.warning("⚠️ La colonne **Groupes** semble vide ou mal alignée. "
@@ -331,11 +332,11 @@ with tab_verif:
     nom_guess, prenom_guess = autodetect_name_columns(list(data.columns))
     col1, col2 = st.columns(2)
     with col1:
-        nom_col = st.selectbox("Colonne Nom", options=["—"] + list(data.columns],
+        nom_col = st.selectbox("Colonne Nom", options=["—"] + list(data.columns),
                                index=(["—"] + list(data.columns)).index(nom_guess) if nom_guess in (["—"] + list(data.columns)) else 0,
                                key="nom_verif")
     with col2:
-        prenom_col = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns],
+        prenom_col = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns),
                                   index=(["—"] + list(data.columns)).index(prenom_guess) if prenom_guess in (["—"] + list(data.columns)) else 0,
                                   key="prenom_verif")
     nom_col = None if nom_col == "—" else nom_col
@@ -352,10 +353,7 @@ with tab_verif:
     # Répartition
     counts = df["Diagnostic"].value_counts().sort_index()
     total = int(len(df))
-
-    c0, = st.columns(1)
-    with c0:
-        st.markdown(f'<div class="kpi"><b>Total</b><br><span style="font-size:1.4rem">{total}</span></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi"><b>Total</b><br><span style="font-size:1.4rem">{total}</span></div>', unsafe_allow_html=True)
 
     st.markdown("#### Répartition par diagnostic")
     rep_df = counts.reset_index()
@@ -366,17 +364,17 @@ with tab_verif:
     # Tableau
     base_cols = [c for c in df.columns if c not in [GROUPES_COL_NAME, "Diagnostic", "FiliereDéduite", "ClasseDéduite", "NumerosTrouvés", "NumerosConnus", "NumerosInconnus"]]
     display_cols = base_cols + [GROUPES_COL_NAME, "Diagnostic"]
-    if st.checkbox("Afficher colonnes techniques", value=show_debug, key="tech_verif"):
+    if st.checkbox("Afficher colonnes techniques", value=False, key="tech_verif"):
         display_cols += ["FiliereDéduite", "ClasseDéduite", "NumerosTrouvés", "NumerosConnus", "NumerosInconnus"]
     st.markdown("### Données vérifiées")
     st.dataframe(df[display_cols], use_container_width=True)
 
-    # Export JSON
+    # Export JSON complet
     records = df.to_dict(orient="records")
     json_bytes = json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8")
     st.download_button("⬇️ Télécharger JSON (complet)", data=json_bytes, file_name="export_verifie.json", mime="application/json", key="json_verif")
 
-    # Export erreurs (Nom, Prénom, Diagnostic)
+    # Export erreurs (Nom, Prénom, Diagnostic) — CSV 3 colonnes
     erreurs = df[df["Diagnostic"] != "OK"].copy()
 
     def safe_col(s: pd.Series) -> pd.Series:
@@ -400,7 +398,7 @@ with tab_verif:
             "Prénom": safe_col(erreurs[prenom_for_export]),
             "Diagnostic": safe_col(erreurs["Diagnostic"]),
         })
-        sep = ";" if export_semicolon else ","
+        sep = ";" if st.sidebar.checkbox("CSV erreurs avec point-virgule (;)", value=True, key="sep_csv") else ","
         csv_text = export_df.to_csv(index=False, sep=sep)
         csv_bytes = csv_text.encode("utf-8-sig")
         st.download_button("⬇️ Télécharger uniquement les erreurs (CSV) — 3 colonnes", data=csv_bytes,
@@ -441,9 +439,9 @@ with tab_xlsx:
 
     for _, row in data.iterrows():
         nums = parse_numeros(row.get(GROUPES_COL_NAME))
-        # ---- NOUVEAU : exclusion des "numéros exception" de l'export Excel ----
+        # EXCLUSION des "numéros exception" dans l'export Excel
         if any(n in EXCEPTION_OK_IF_CLASS_ONLY for n in nums):
-            continue  # on n'ajoute pas cet étudiant aux listes Excel
+            continue
         cls = classes_for_row(nums)
         if not cls:
             continue
@@ -454,12 +452,10 @@ with tab_xlsx:
             classes_to_students[c].append((nom_v, prenom_v, tel_v))
 
     def sanitize_sheet_name(name: str) -> str:
-        # Nettoie pour Excel (pas >31 caractères, pas de : \ / ? * [ ] )
-        safe = "".join(ch for ch in name if ch not in '[]:*?/\\')
-        safe = safe.strip()
-        # Supprime accents
+        # Nettoie pour Excel (<=31 char, pas de : \ / ? * [ ])
+        safe = "".join(ch for ch in name if ch not in '[]:*?/\\').strip()
         safe = unicodedata.normalize('NFKD', safe).encode('ascii', 'ignore').decode('ascii')
-        return safe[:31] if len(safe) > 31 else safe or "Classe"
+        return (safe or "Classe")[:31]
 
     # Génération du fichier Excel .xlsx (multi-onglets)
     if st.button("📄 Générer l’Excel (1 onglet = 1 classe)"):
@@ -468,28 +464,34 @@ with tab_xlsx:
         else:
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-                for ccode in sorted(classes_to_students.keys(), key=lambda c: CLASS_NAMES.get(c, str(c))):
-                    label = CLASS_NAMES.get(ccode, f"Classe {ccode}")
-                    sheet = sanitize_sheet_name(label)
+                if not classes_to_students:
+                    # Crée un onglet vide explicite si aucune classe détectée
+                    pd.DataFrame(columns=["Nom", "Prénom", "Téléphone", "Remarque", "Fiches récupérées ?"])\
+                        .to_excel(writer, sheet_name="Aucune classe", index=False)
+                else:
+                    for ccode in sorted(classes_to_students.keys(), key=lambda c: CLASS_NAMES.get(c, str(c))):
+                        label = CLASS_NAMES.get(ccode, f"Classe {ccode}")
+                        sheet = sanitize_sheet_name(label)
 
-                    rows_sorted = sorted(classes_to_students[ccode], key=lambda t: ((t[0] or "").lower(), (t[1] or "").lower()))
-                    df_sheet = pd.DataFrame(rows_sorted, columns=["Nom", "Prénom", "Téléphone"])
-                    # Colonnes demandées (vides)
-                    df_sheet["Remarque"] = ""
-                    df_sheet["Fiches récupérées ?"] = ""
+                        rows_sorted = sorted(classes_to_students[ccode], key=lambda t: ((t[0] or "").lower(), (t[1] or "").lower()))
+                        df_sheet = pd.DataFrame(rows_sorted, columns=["Nom", "Prénom", "Téléphone"])
+                        # Colonnes demandées (vides)
+                        df_sheet["Remarque"] = ""
+                        df_sheet["Fiches récupérées ?"] = ""
 
-                    df_sheet.to_excel(writer, sheet_name=sheet, index=False)
+                        df_sheet.to_excel(writer, sheet_name=sheet, index=False)
 
-                    # Mise en forme basique
-                    wb  = writer.book
-                    ws  = writer.sheets[sheet]
-                    header_fmt = wb.add_format({"bold": True, "bg_color": "#EEEEEE", "border": 1})
-                    cell_fmt   = wb.add_format({"border": 1})
-                    for col_idx, _ in enumerate(df_sheet.columns):
-                        ws.set_column(col_idx, col_idx, 22)
-                    ws.set_row(0, 18, header_fmt)
-                    for r in range(1, len(df_sheet) + 1):
-                        ws.set_row(r, 16, cell_fmt)
+                        # Mise en forme basique
+                        wb = writer.book
+                        ws = writer.sheets[sheet]
+                        header_fmt = wb.add_format({"bold": True, "bg_color": "#EEEEEE", "border": 1})
+                        cell_fmt = wb.add_format({"border": 1})
+                        widths = [22, 22, 18, 28, 22]
+                        for col_idx, w in enumerate(widths):
+                            ws.set_column(col_idx, col_idx, w)
+                        ws.set_row(0, 18, header_fmt)
+                        for r in range(1, len(df_sheet) + 1):
+                            ws.set_row(r, 16, cell_fmt)
 
             buffer.seek(0)
             st.download_button("⬇️ Télécharger l’Excel par classe (.xlsx)", data=buffer,
