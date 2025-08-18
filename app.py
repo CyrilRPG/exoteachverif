@@ -54,7 +54,7 @@ FILIERE_NAMES: Dict[int, str] = {
 }
 
 CLASS_NAMES: Dict[int, str] = {
-    # USPN (classes) — LAS 1 = 5944
+    # USPN
     5944: "USPN - Classe 1 (LAS) 25/26",
     5943: "USPN - Classe 2 (PASS/LSPS) 25/26",
     5942: "USPN - Classe 1 (PASS/LSPS) 25/26",
@@ -106,49 +106,39 @@ CLASS_NAMES: Dict[int, str] = {
 
 # FILIERE -> CLASSES autorisées
 FILIERE_TO_CLASSES: Dict[int, Set[int]] = {
-    # USPN
     5016: {5944},
     5017: {5942, 5943},
     5018: {5942, 5943},
-    # UPC
     5012: {5932, 5933, 5934, 5935},
     5013: {5931},
-    # SU
     5014: {5936, 5937, 5938, 5939, 5940},
-    # UVSQ
     5015: {5941},
-    # UPS
     5019: {5945},
-    # UPEC
     5020: {5946},
     5021: {5947, 5948, 5949, 5950},
     5022: {5951, 5952, 5953},
     5032: set(),
-    # PAES
     5023: {6122, 6123, 6124, 6125},
     5024: {6127},
-    # Terminale Santé
     5025: {6112, 6113, 6114, 6115, 6116, 6117, 6118, 6119},
     5026: {6120},
-    # Première Élite
     5027: {6128},
 }
 
 # Inverse : CLASSE -> FILIERES
-from collections import defaultdict
 CLASSES_TO_FILIERES: Dict[int, Set[int]] = defaultdict(set)
 for fcode, cls_set in FILIERE_TO_CLASSES.items():
     for c in cls_set:
         CLASSES_TO_FILIERES[c].add(fcode)
 
-# OFFICIEL (tous codes) pour la détection dans la colonne Groupes
+# OFFICIEL (tous codes) pour la détection
 OFFICIEL: Dict[int, Tuple[str, str]] = {}
 for f_code, f_name in FILIERE_NAMES.items():
     OFFICIEL[f_code] = (f_name, "Filière")
 for c_code, c_name in CLASS_NAMES.items():
     OFFICIEL[c_code] = (c_name, "Classe")
 
-# ---------- Exceptions : classe sans filière => OK (vérification) & exclus de l'Excel ----------
+# Exceptions : OK si classe seule (vérif) + EXCLUS de l'Excel
 EXCEPTION_OK_IF_CLASS_ONLY: Set[int] = {
     4538, 4537, 4388, 4386, 4385, 4384, 4383, 4382, 4381, 4380, 4379, 4378, 4377, 4376, 4375
 }
@@ -173,7 +163,7 @@ def analyser_groupes(groupes_str: Any) -> str:
 
     if len(filieres) == 0 and len(classes) > 0:
         if has_exception:
-            return "OK"  # autorisé si classe seule ET code exception
+            return "OK"
         return "Pas de filière"
 
     if len(classes) == 0 and len(filieres) > 0:
@@ -186,7 +176,6 @@ def analyser_groupes(groupes_str: Any) -> str:
     if len(classes) > 1:
         return "Plusieurs classes"
 
-    # 1 filière et 1 classe -> vérifie appartenance par mapping
     f = filieres[0]
     c = classes[0]
     if c in CLASSES_TO_FILIERES and f in CLASSES_TO_FILIERES[c]:
@@ -393,12 +382,12 @@ with tab_verif:
             erreurs["__PRENOM__"] = ""
             prenom_for_export = "__PRENOM__"
             st.warning("La colonne Prénom sélectionnée n’existe pas — exportera une colonne vide.")
+        sep = ";" if st.sidebar.checkbox("CSV erreurs avec point-virgule (;)", value=True, key="sep_csv") else ","
         export_df = pd.DataFrame({
             "Nom": safe_col(erreurs[nom_for_export]),
             "Prénom": safe_col(erreurs[prenom_for_export]),
             "Diagnostic": safe_col(erreurs["Diagnostic"]),
         })
-        sep = ";" if st.sidebar.checkbox("CSV erreurs avec point-virgule (;)", value=True, key="sep_csv") else ","
         csv_text = export_df.to_csv(index=False, sep=sep)
         csv_bytes = csv_text.encode("utf-8-sig")
         st.download_button("⬇️ Télécharger uniquement les erreurs (CSV) — 3 colonnes", data=csv_bytes,
@@ -457,41 +446,88 @@ with tab_xlsx:
         safe = unicodedata.normalize('NFKD', safe).encode('ascii', 'ignore').decode('ascii')
         return (safe or "Classe")[:31]
 
+    # --------- Choix moteur Excel: xlsxwriter si dispo, sinon openpyxl ---------
+    try:
+        import xlsxwriter  # noqa: F401
+        EXCEL_ENGINE = "xlsxwriter"
+    except Exception:
+        EXCEL_ENGINE = "openpyxl"
+
+    # Helpers mise en forme selon moteur
+    def format_sheet_xlsxwriter(writer, sheet_name, df_len):
+        wb = writer.book
+        ws = writer.sheets[sheet_name]
+        header_fmt = wb.add_format({"bold": True, "bg_color": "#EEEEEE", "border": 1})
+        cell_fmt   = wb.add_format({"border": 1})
+        widths = [22, 22, 18, 28, 22]
+        for col_idx, w in enumerate(widths):
+            ws.set_column(col_idx, col_idx, w)
+        ws.set_row(0, 18, header_fmt)
+        for r in range(1, df_len + 1):
+            ws.set_row(r, 16, cell_fmt)
+
+    def idx_to_col(idx: int) -> str:
+        s = ""
+        idx0 = idx
+        while True:
+            idx0, r = divmod(idx0, 26)
+            s = chr(65 + r) + s
+            if idx0 == 0:
+                break
+            idx0 -= 1
+        return s
+
+    def format_sheet_openpyxl(writer, sheet_name, df_len):
+        from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+        ws = writer.sheets[sheet_name]
+        widths = [22, 22, 18, 28, 22]
+        # Largeurs
+        for i, w in enumerate(widths):
+            col_letter = idx_to_col(i)
+            ws.column_dimensions[col_letter].width = w
+        # En-tête
+        header_font = Font(bold=True)
+        header_fill = PatternFill(start_color="EEEEEE", end_color="EEEEEE", fill_type="solid")
+        thin = Side(style="thin")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = border
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        # Bordures cellules
+        for r in range(2, df_len + 2):
+            for c in range(1, 6+0):  # 5 colonnes
+                ws.cell(row=r, column=c).border = border
+
     # Génération du fichier Excel .xlsx (multi-onglets)
     if st.button("📄 Générer l’Excel (1 onglet = 1 classe)"):
         if not nom_col_x or not prenom_col_x:
             st.error("Sélectionne d'abord **Nom** et **Prénom**.")
         else:
             buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+            with pd.ExcelWriter(buffer, engine=EXCEL_ENGINE) as writer:
                 if not classes_to_students:
-                    # Crée un onglet vide explicite si aucune classe détectée
-                    pd.DataFrame(columns=["Nom", "Prénom", "Téléphone", "Remarque", "Fiches récupérées ?"])\
-                        .to_excel(writer, sheet_name="Aucune classe", index=False)
+                    df_empty = pd.DataFrame(columns=["Nom", "Prénom", "Téléphone", "Remarque", "Fiches récupérées ?"])
+                    df_empty.to_excel(writer, sheet_name="Aucune classe", index=False)
+                    # Mise en forme minimale
+                    if EXCEL_ENGINE == "xlsxwriter":
+                        format_sheet_xlsxwriter(writer, "Aucune classe", 0)
+                    else:
+                        format_sheet_openpyxl(writer, "Aucune classe", 0)
                 else:
                     for ccode in sorted(classes_to_students.keys(), key=lambda c: CLASS_NAMES.get(c, str(c))):
                         label = CLASS_NAMES.get(ccode, f"Classe {ccode}")
                         sheet = sanitize_sheet_name(label)
-
                         rows_sorted = sorted(classes_to_students[ccode], key=lambda t: ((t[0] or "").lower(), (t[1] or "").lower()))
                         df_sheet = pd.DataFrame(rows_sorted, columns=["Nom", "Prénom", "Téléphone"])
-                        # Colonnes demandées (vides)
                         df_sheet["Remarque"] = ""
                         df_sheet["Fiches récupérées ?"] = ""
-
                         df_sheet.to_excel(writer, sheet_name=sheet, index=False)
-
-                        # Mise en forme basique
-                        wb = writer.book
-                        ws = writer.sheets[sheet]
-                        header_fmt = wb.add_format({"bold": True, "bg_color": "#EEEEEE", "border": 1})
-                        cell_fmt = wb.add_format({"border": 1})
-                        widths = [22, 22, 18, 28, 22]
-                        for col_idx, w in enumerate(widths):
-                            ws.set_column(col_idx, col_idx, w)
-                        ws.set_row(0, 18, header_fmt)
-                        for r in range(1, len(df_sheet) + 1):
-                            ws.set_row(r, 16, cell_fmt)
+                        if EXCEL_ENGINE == "xlsxwriter":
+                            format_sheet_xlsxwriter(writer, sheet, len(df_sheet))
+                        else:
+                            format_sheet_openpyxl(writer, sheet, len(df_sheet))
 
             buffer.seek(0)
             st.download_button("⬇️ Télécharger l’Excel par classe (.xlsx)", data=buffer,
