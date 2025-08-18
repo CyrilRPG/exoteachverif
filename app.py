@@ -1,21 +1,16 @@
-# app.py — Vérification I3/I4+ + PDF (1 page = 1 classe, jusqu'à 42 élèves)
+# app.py — Vérification I3/I4+ + Export Excel (1 onglet = 1 classe)
 import json
 import re
 from typing import List, Tuple, Dict, Any, Optional, Set, DefaultDict
 from collections import defaultdict
 import io
+import unicodedata
 
 import pandas as pd
 import streamlit as st
 
-# PDF
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether
-
 # ------------------------------- UI / THEME -------------------------------
-st.set_page_config(page_title="Vérif Groupes Étudiants — I3/I4+ & PDF", page_icon="✅", layout="wide")
+st.set_page_config(page_title="Vérif Groupes Étudiants — I3/I4+ & Excel multi-onglets", page_icon="✅", layout="wide")
 st.markdown("""
 <style>
 :root { --radius: 14px; }
@@ -26,7 +21,7 @@ small.dim { color:#6b7280; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Vérification des groupes étudiants — format I3/I4+ & Générateur PDF")
+st.title("Vérification des groupes étudiants — format I3/I4+ & Export Excel par classe")
 
 # ==================== RÉFÉRENTIEL (FILIERES ↔ CLASSES) ====================
 FILIERE_NAMES: Dict[int, str] = {
@@ -112,12 +107,12 @@ CLASS_NAMES: Dict[int, str] = {
 # FILIERE -> CLASSES autorisées
 FILIERE_TO_CLASSES: Dict[int, Set[int]] = {
     # USPN
-    5016: {5944},           # LAS - USPN -> Classe 1 (LAS)
-    5017: {5942, 5943},     # PASS - USPN -> Classes PASS/LSPS
-    5018: {5942, 5943},     # LSPS - USPN -> Classes PASS/LSPS
+    5016: {5944},
+    5017: {5942, 5943},
+    5018: {5942, 5943},
     # UPC
-    5012: {5932, 5933, 5934, 5935},  # PASS - UPC
-    5013: {5931},                    # LAS - UPC
+    5012: {5932, 5933, 5934, 5935},
+    5013: {5931},
     # SU
     5014: {5936, 5937, 5938, 5939, 5940},
     # UVSQ
@@ -326,7 +321,7 @@ if digits4 == 0:
     st.write(data[GROUPES_COL_NAME].head(10))
 
 # --------------------------- Onglets ---------------------------
-tab_verif, tab_pdf = st.tabs(["✅ Vérification", "🧾 Listes PDF (1 page = 1 classe)"])
+tab_verif, tab_xlsx = st.tabs(["✅ Vérification", "📄 Listes Excel (1 onglet = 1 classe)"])
 
 # =========================
 # Onglet 1 : Vérification
@@ -336,11 +331,11 @@ with tab_verif:
     nom_guess, prenom_guess = autodetect_name_columns(list(data.columns))
     col1, col2 = st.columns(2)
     with col1:
-        nom_col = st.selectbox("Colonne Nom", options=["—"] + list(data.columns),
+        nom_col = st.selectbox("Colonne Nom", options=["—"] + list(data.columns],
                                index=(["—"] + list(data.columns)).index(nom_guess) if nom_guess in (["—"] + list(data.columns)) else 0,
                                key="nom_verif")
     with col2:
-        prenom_col = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns),
+        prenom_col = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns],
                                   index=(["—"] + list(data.columns)).index(prenom_guess) if prenom_guess in (["—"] + list(data.columns)) else 0,
                                   key="prenom_verif")
     nom_col = None if nom_col == "—" else nom_col
@@ -412,33 +407,33 @@ with tab_verif:
                            file_name="erreurs_groupes.csv", mime="text/csv", key="csv_erreurs")
 
 # =========================
-# Onglet 2 : PDF (1 page = 1 classe, jusqu'à 42 élèves)
+# Onglet 2 : Excel multi-onglets (1 onglet = 1 classe)
 # =========================
-with tab_pdf:
-    st.subheader("Paramètres colonnes (PDF)")
+with tab_xlsx:
+    st.subheader("Paramètres colonnes (Excel)")
     nom_guess2, prenom_guess2 = autodetect_name_columns(list(data.columns))
     tel_guess = autodetect_phone_column(list(data.columns))
     c1, c2, c3 = st.columns(3)
     with c1:
-        nom_col_pdf = st.selectbox("Colonne Nom", options=["—"] + list(data.columns),
-                                   index=(["—"] + list(data.columns)).index(nom_guess2) if nom_guess2 in (["—"] + list(data.columns)) else 0,
-                                   key="nom_pdf")
+        nom_col_x = st.selectbox("Colonne Nom", options=["—"] + list(data.columns),
+                                 index=(["—"] + list(data.columns)).index(nom_guess2) if nom_guess2 in (["—"] + list(data.columns)) else 0,
+                                 key="nom_xlsx")
     with c2:
-        prenom_col_pdf = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns),
-                                      index=(["—"] + list(data.columns)).index(prenom_guess2) if prenom_guess2 in (["—"] + list(data.columns)) else 0,
-                                      key="prenom_pdf")
+        prenom_col_x = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns),
+                                    index=(["—"] + list(data.columns)).index(prenom_guess2) if prenom_guess2 in (["—"] + list(data.columns)) else 0,
+                                    key="prenom_xlsx")
     with c3:
-        tel_col_pdf = st.selectbox("Colonne Téléphone", options=["—"] + list(data.columns),
-                                   index=(["—"] + list(data.columns)).index(tel_guess) if tel_guess in (["—"] + list(data.columns)) else 0,
-                                   key="tel_pdf")
-    nom_col_pdf = None if nom_col_pdf == "—" else nom_col_pdf
-    prenom_col_pdf = None if prenom_col_pdf == "—" else prenom_col_pdf
-    tel_col_pdf = None if tel_col_pdf == "—" else tel_col_pdf
+        tel_col_x = st.selectbox("Colonne Téléphone", options=["—"] + list(data.columns),
+                                 index=(["—"] + list(data.columns)).index(tel_guess) if tel_guess in (["—"] + list(data.columns)) else 0,
+                                 key="tel_xlsx")
+    nom_col_x = None if nom_col_x == "—" else nom_col_x
+    prenom_col_x = None if prenom_col_x == "—" else prenom_col_x
+    tel_col_x = None if tel_col_x == "—" else tel_col_x
 
     st.markdown("#### Aperçu (10 lignes)")
     st.dataframe(data.head(10), use_container_width=True)
 
-    # Préparer : classes -> liste d'étudiants (Nom, Prénom, Téléphone)
+    # Préparer : classes -> étudiants (Nom, Prénom, Téléphone + colonnes vides)
     classes_to_students: Dict[int, list] = defaultdict(list)
 
     def classes_for_row(nums: List[int]) -> Set[int]:
@@ -446,68 +441,58 @@ with tab_pdf:
 
     for _, row in data.iterrows():
         nums = parse_numeros(row.get(GROUPES_COL_NAME))
+        # ---- NOUVEAU : exclusion des "numéros exception" de l'export Excel ----
+        if any(n in EXCEPTION_OK_IF_CLASS_ONLY for n in nums):
+            continue  # on n'ajoute pas cet étudiant aux listes Excel
         cls = classes_for_row(nums)
         if not cls:
             continue
-        nom_v = "" if not nom_col_pdf else str(row.get(nom_col_pdf, "") or "")
-        prenom_v = "" if not prenom_col_pdf else str(row.get(prenom_col_pdf, "") or "")
-        tel_v = "" if not tel_col_pdf else str(row.get(tel_col_pdf, "") or "")
+        nom_v = "" if not nom_col_x else str(row.get(nom_col_x, "") or "")
+        prenom_v = "" if not prenom_col_x else str(row.get(prenom_col_x, "") or "")
+        tel_v = "" if not tel_col_x else str(row.get(tel_col_x, "") or "")
         for c in cls:
             classes_to_students[c].append((nom_v, prenom_v, tel_v))
 
-    # Génération du PDF : 1 page = 1 classe, police petite, max 42 élèves/page
-    MAX_PER_PAGE = 42
+    def sanitize_sheet_name(name: str) -> str:
+        # Nettoie pour Excel (pas >31 caractères, pas de : \ / ? * [ ] )
+        safe = "".join(ch for ch in name if ch not in '[]:*?/\\')
+        safe = safe.strip()
+        # Supprime accents
+        safe = unicodedata.normalize('NFKD', safe).encode('ascii', 'ignore').decode('ascii')
+        return safe[:31] if len(safe) > 31 else safe or "Classe"
 
-    if st.button("🧾 Générer le PDF (1 page = 1 classe, 42 élèves max)"):
-        if not nom_col_pdf or not prenom_col_pdf:
+    # Génération du fichier Excel .xlsx (multi-onglets)
+    if st.button("📄 Générer l’Excel (1 onglet = 1 classe)"):
+        if not nom_col_x or not prenom_col_x:
             st.error("Sélectionne d'abord **Nom** et **Prénom**.")
         else:
             buffer = io.BytesIO()
-            doc = SimpleDocTemplate(
-                buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36,
-                title="Listes par classe", author="Auto"
-            )
-            styles = getSampleStyleSheet()
-            class_style = ParagraphStyle("ClassTitle", parent=styles["Heading1"], fontSize=16, leading=19, spaceAfter=8)
+            with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+                for ccode in sorted(classes_to_students.keys(), key=lambda c: CLASS_NAMES.get(c, str(c))):
+                    label = CLASS_NAMES.get(ccode, f"Classe {ccode}")
+                    sheet = sanitize_sheet_name(label)
 
-            elements = []
+                    rows_sorted = sorted(classes_to_students[ccode], key=lambda t: ((t[0] or "").lower(), (t[1] or "").lower()))
+                    df_sheet = pd.DataFrame(rows_sorted, columns=["Nom", "Prénom", "Téléphone"])
+                    # Colonnes demandées (vides)
+                    df_sheet["Remarque"] = ""
+                    df_sheet["Fiches récupérées ?"] = ""
 
-            ordered_classes = sorted(classes_to_students.keys(), key=lambda c: CLASS_NAMES.get(c, str(c)))
+                    df_sheet.to_excel(writer, sheet_name=sheet, index=False)
 
-            for ccode in ordered_classes:
-                class_title = CLASS_NAMES.get(ccode, f"Classe {ccode}")
-                rows_sorted = sorted(classes_to_students[ccode], key=lambda t: ((t[0] or "").lower(), (t[1] or "").lower()))
-                page_rows = rows_sorted[:MAX_PER_PAGE]  # <= 42 élèves
+                    # Mise en forme basique
+                    wb  = writer.book
+                    ws  = writer.sheets[sheet]
+                    header_fmt = wb.add_format({"bold": True, "bg_color": "#EEEEEE", "border": 1})
+                    cell_fmt   = wb.add_format({"border": 1})
+                    for col_idx, _ in enumerate(df_sheet.columns):
+                        ws.set_column(col_idx, col_idx, 22)
+                    ws.set_row(0, 18, header_fmt)
+                    for r in range(1, len(df_sheet) + 1):
+                        ws.set_row(r, 16, cell_fmt)
 
-                page_block = []
-                page_block.append(Paragraph(class_title, class_style))
-                page_block.append(Spacer(1, 6))
-
-                data_rows = [["Nom", "Prénom", "Téléphone"]]
-                data_rows += [[n, p, t] for (n, p, t) in page_rows]
-
-                # Largeurs adaptées A4; petite police pour tenir 42 lignes
-                tbl = Table(data_rows, colWidths=[220, 220, 83])
-                tbl.setStyle(TableStyle([
-                    ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-                    ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
-                    ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-                    ("ALIGN", (0,0), (-1,0), "CENTER"),
-                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                    ("FONTSIZE", (0,0), (-1,-1), 9),
-                    ("BOTTOMPADDING", (0,0), (-1,0), 4),
-                    ("TOPPADDING", (0,1), (-1,-1), 2),
-                    ("BOTTOMPADDING", (0,1), (-1,-1), 2),
-                ]))
-                page_block.append(tbl)
-
-                elements.append(KeepTogether(page_block))
-                elements.append(PageBreak())
-
-            if elements and isinstance(elements[-1], PageBreak):
-                elements = elements[:-1]
-
-            doc.build(elements)
             buffer.seek(0)
-            st.download_button("⬇️ Télécharger le PDF", data=buffer, file_name="listes_par_classe.pdf",
-                               mime="application/pdf", key="pdf_download_classes")
+            st.download_button("⬇️ Télécharger l’Excel par classe (.xlsx)", data=buffer,
+                               file_name="listes_par_classe.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key="xlsx_download")
