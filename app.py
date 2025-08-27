@@ -5,9 +5,21 @@ from typing import List, Tuple, Dict, Any, Optional, Set
 from collections import defaultdict
 import io
 import unicodedata
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
+
+# ====== NEW: PDF (reportlab) ======
+try:
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    REPORTLAB_OK = True
+except Exception:
+    REPORTLAB_OK = False
 
 # ------------------------------- UI / THEME -------------------------------
 st.set_page_config(page_title="Vérif Groupes Étudiants — I3/I4+ & Excel multi-onglets", page_icon="✅", layout="wide")
@@ -138,7 +150,7 @@ for f_code, f_name in FILIERE_NAMES.items():
 for c_code, c_name in CLASS_NAMES.items():
     OFFICIEL[c_code] = (c_name, "Classe")
 
-# Exceptions : OK si classe seule (vérif) + EXCLUS de l'Excel
+# Exceptions : OK si classe seule (vérif) + EXCLUS de l'Excel/PDF
 EXCEPTION_OK_IF_CLASS_ONLY: Set[int] = {
     4538, 4537, 4388, 4386, 4385, 4384, 4383, 4382, 4381, 4380, 4379, 4378, 4377, 4376, 4375
 }
@@ -149,6 +161,16 @@ def parse_numeros(groupes_str: Any) -> List[int]:
     if pd.isna(groupes_str):
         return []
     return [int(m.group(0)) for m in NUM_RE.finditer(str(groupes_str))]
+
+# ====== NEW: helpers pour exclure "Salomé Galbois" (sans accent/casse) ======
+def _normalize(s: str) -> str:
+    s = (s or "").strip()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return s.lower()
+
+def is_salome_galbois(nom: str, prenom: str) -> bool:
+    return _normalize(nom) == "galbois" and _normalize(prenom) == "salome"
 
 # ============================= ANALYSE =============================
 def analyser_groupes(groupes_str: Any) -> str:
@@ -311,7 +333,8 @@ if digits4 == 0:
     st.write(data[GROUPES_COL_NAME].head(10))
 
 # --------------------------- Onglets ---------------------------
-tab_verif, tab_xlsx = st.tabs(["✅ Vérification", "📄 Listes Excel (1 onglet = 1 classe)"])
+# ====== NEW: ajout d’un onglet PDF, tout le reste inchangé ======
+tab_verif, tab_xlsx, tab_pdf = st.tabs(["✅ Vérification", "📄 Listes Excel (1 onglet = 1 classe)", "🖨️ Listes PDF (1 page = 1 classe)"])
 
 # =========================
 # Onglet 1 : Vérification
@@ -437,6 +460,11 @@ with tab_xlsx:
         nom_v = "" if not nom_col_x else str(row.get(nom_col_x, "") or "")
         prenom_v = "" if not prenom_col_x else str(row.get(prenom_col_x, "") or "")
         tel_v = "" if not tel_col_x else str(row.get(tel_col_x, "") or "")
+
+        # ====== NEW: exclure Salomé Galbois ======
+        if is_salome_galbois(nom_v, prenom_v):
+            continue
+
         for c in cls:
             classes_to_students[c].append((nom_v, prenom_v, tel_v))
 
@@ -534,3 +562,136 @@ with tab_xlsx:
                                file_name="listes_par_classe.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                key="xlsx_download")
+
+# =========================
+# Onglet 3 : PDF (1 page = 1 classe)
+# =========================
+with tab_pdf:
+    if not REPORTLAB_OK:
+        st.error("Le module 'reportlab' n'est pas installé. Ajoute-le à ton environnement pour générer le PDF :\n\npip install reportlab")
+    else:
+        st.subheader("Paramètres colonnes (PDF)")
+        nom_guess3, prenom_guess3 = autodetect_name_columns(list(data.columns))
+        tel_guess3 = autodetect_phone_column(list(data.columns))
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            nom_col_p = st.selectbox("Colonne Nom (PDF)", options=["—"] + list(data.columns),
+                                     index=(["—"] + list(data.columns)).index(nom_guess3) if nom_guess3 in (["—"] + list(data.columns)) else 0,
+                                     key="nom_pdf")
+        with p2:
+            prenom_col_p = st.selectbox("Colonne Prénom (PDF)", options=["—"] + list(data.columns),
+                                        index=(["—"] + list(data.columns)).index(prenom_guess3) if prenom_guess3 in (["—"] + list(data.columns)) else 0,
+                                        key="prenom_pdf")
+        with p3:
+            tel_col_p = st.selectbox("Colonne Téléphone (PDF)", options=["—"] + list(data.columns),
+                                     index=(["—"] + list(data.columns)).index(tel_guess3) if tel_guess3 in (["—"] + list(data.columns)) else 0,
+                                     key="tel_pdf")
+        nom_col_p = None if nom_col_p == "—" else nom_col_p
+        prenom_col_p = None if prenom_col_p == "—" else prenom_col_p
+        tel_col_p = None if tel_col_p == "—" else tel_col_p
+
+        # Construire classes->étudiants (mêmes règles d’exclusion)
+        classes_to_students_pdf: Dict[int, list] = defaultdict(list)
+
+        def classes_for_row(nums: List[int]) -> Set[int]:
+            return {n for n in nums if n in CLASS_NAMES}
+
+        for _, row in data.iterrows():
+            nums = parse_numeros(row.get(GROUPES_COL_NAME))
+            if any(n in EXCEPTION_OK_IF_CLASS_ONLY for n in nums):
+                continue
+            cls = classes_for_row(nums)
+            if not cls:
+                continue
+            nom_v = "" if not nom_col_p else str(row.get(nom_col_p, "") or "")
+            prenom_v = "" if not prenom_col_p else str(row.get(prenom_col_p, "") or "")
+            tel_v = "" if not tel_col_p else str(row.get(tel_col_p, "") or "")
+
+            # ====== NEW: exclure Salomé Galbois (PDF aussi) ======
+            if is_salome_galbois(nom_v, prenom_v):
+                continue
+
+            for c in cls:
+                classes_to_students_pdf[c].append((nom_v, prenom_v, tel_v))
+
+        st.markdown("#### Aperçu PDF (10 lignes du dataset source)")
+        st.dataframe(data.head(10), use_container_width=True)
+
+        # ====== NEW: fonction de génération PDF (mise en page soignée) ======
+        def build_pdf(classes_map: Dict[int, list]) -> bytes:
+            buffer = io.BytesIO()
+            # Marges confortables
+            doc = SimpleDocTemplate(
+                buffer, pagesize=A4,
+                leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm
+            )
+            styles = getSampleStyleSheet()
+            styles.add(ParagraphStyle(name="ClassTitle", parent=styles["Heading2"], spaceAfter=8, fontSize=14, leading=16))
+            styles.add(ParagraphStyle(name="Meta", parent=styles["Normal"], fontSize=8, textColor=colors.grey))
+
+            elements = []
+
+            # En-tête global (date)
+            today = datetime.now().strftime("%d/%m/%Y %H:%M")
+            elements.append(Paragraph(f"Généré le {today}", styles["Meta"]))
+            elements.append(Spacer(1, 4))
+
+            first = True
+            for ccode in sorted(classes_map.keys(), key=lambda c: CLASS_NAMES.get(c, str(c))):
+                if not first:
+                    elements.append(PageBreak())
+                first = False
+                label = CLASS_NAMES.get(ccode, f"Classe {ccode}")
+                elements.append(Paragraph(label, styles["ClassTitle"]))
+                elements.append(Spacer(1, 4))
+
+                data_tbl = [["Nom", "Prénom", "Téléphone", "Remarque", "Fiches récupérées ?"]]
+                rows_sorted = sorted(classes_map[ccode], key=lambda t: ((t[0] or "").lower(), (t[1] or "").lower()))
+                for nom_v, prenom_v, tel_v in rows_sorted:
+                    data_tbl.append([nom_v, prenom_v, tel_v, "", ""])
+
+                # Largeurs colonnes (A4 ~ 180-190mm utilisables avec marges)
+                col_widths = [45*mm, 45*mm, 30*mm, 35*mm, 35*mm]
+
+                # Table & style
+                tbl = Table(data_tbl, colWidths=col_widths, hAlign="LEFT")
+                tbl.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEEEEE")),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 10),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+                    ("ALIGN", (0, 1), (-1, -1), "LEFT"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("FONTSIZE", (0, 1), (-1, -1), 9),
+
+                    # zébrage lignes
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FAFAFA")]),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ]))
+                elements.append(tbl)
+                elements.append(Spacer(1, 6))
+                elements.append(Paragraph("<i>Chaque classe commence sur une nouvelle page.</i>", styles["Meta"]))
+
+            doc.build(elements)
+            buffer.seek(0)
+            return buffer.getvalue()
+
+        # Bouton PDF
+        if st.button("🖨️ Générer le PDF (1 page = 1 classe)"):
+            if not nom_col_p or not prenom_col_p:
+                st.error("Sélectionne d'abord **Nom** et **Prénom**.")
+            else:
+                pdf_bytes = build_pdf(classes_to_students_pdf if classes_to_students_pdf else {})
+                st.download_button(
+                    "⬇️ Télécharger le PDF par classe",
+                    data=pdf_bytes,
+                    file_name="listes_par_classe.pdf",
+                    mime="application/pdf",
+                    key="pdf_download"
+                )
