@@ -1,8 +1,15 @@
 # app.py — Vérification I3/I4+ + Export Excel/PDF (1 onglet/page = 1 classe)
-# MODIFS :
-# - Ajout colonne "ID" (issues de l'Excel) dans les exports Excel et PDF
+# FIXES :
+# - Désactivation du file watcher Streamlit pour éviter "inotify instance limit reached"
+# - Remplacement de use_container_width=True par width="stretch" (API moderne)
+# MODIFS conservées :
+# - Ajout colonne "ID" (issue de l'Excel) dans les exports Excel et PDF
 # - Suppression de la colonne "Fiches récupérées ?"
 # - Tout le reste inchangé
+
+# ==== IMPORTANT : désactiver le watcher AVANT d'importer streamlit ====
+import os
+os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
 
 import json
 import re
@@ -13,9 +20,11 @@ import unicodedata
 from datetime import datetime
 
 import pandas as pd
-import streamlit as st
 
-# ====== NEW: PDF (reportlab) ======
+import streamlit as st
+st.set_option("server.fileWatcherType", "none")  # ceinture + bretelles
+
+# ====== PDF (reportlab) ======
 try:
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
     from reportlab.lib import colors
@@ -167,7 +176,7 @@ def parse_numeros(groupes_str: Any) -> List[int]:
         return []
     return [int(m.group(0)) for m in NUM_RE.finditer(str(groupes_str))]
 
-# ====== NEW: helpers pour exclure "Salomé Galbois" (sans accent/casse) ======
+# ====== helpers : exclusion "Salomé Galbois" (sans accent/casse) ======
 def _normalize(s: str) -> str:
     s = (s or "").strip()
     s = unicodedata.normalize("NFKD", s)
@@ -264,11 +273,9 @@ def autodetect_phone_column(columns: List[str]) -> Optional[str]:
             return c
     return None
 
-# ====== NEW: auto-détection colonne ID ======
 def autodetect_id_column(columns: List[str]) -> Optional[str]:
     lower_map = {c: str(c).strip().lower() for c in columns}
     for c, l in lower_map.items():
-        # on reste simple : “id” seul ou entouré
         if re.fullmatch(r".*\bid\b.*", l):
             return c
     return None
@@ -384,7 +391,7 @@ with tab_verif:
     rep_df = counts.reset_index()
     rep_df.columns = ["Diagnostic", "Effectif"]
     rep_df.loc[len(rep_df)] = ["Total", total]
-    st.dataframe(rep_df, use_container_width=True)
+    st.dataframe(rep_df, width="stretch")
 
     # Tableau
     base_cols = [c for c in df.columns if c not in [GROUPES_COL_NAME, "Diagnostic", "FiliereDéduite", "ClasseDéduite", "NumerosTrouvés", "NumerosConnus", "NumerosInconnus"]]
@@ -392,7 +399,7 @@ with tab_verif:
     if st.checkbox("Afficher colonnes techniques", value=False, key="tech_verif"):
         display_cols += ["FiliereDéduite", "ClasseDéduite", "NumerosTrouvés", "NumerosConnus", "NumerosInconnus"]
     st.markdown("### Données vérifiées")
-    st.dataframe(df[display_cols], use_container_width=True)
+    st.dataframe(df[display_cols], width="stretch")
 
     # Export JSON complet
     records = df.to_dict(orient="records")
@@ -462,7 +469,7 @@ with tab_xlsx:
     id_col_x = None if id_col_x == "—" else id_col_x
 
     st.markdown("#### Aperçu (10 lignes)")
-    st.dataframe(data.head(10), use_container_width=True)
+    st.dataframe(data.head(10), width="stretch")
 
     # Préparer : classes -> étudiants (ID, Nom, Prénom, Téléphone + Remarque)
     classes_to_students: Dict[int, list] = defaultdict(list)
@@ -483,7 +490,7 @@ with tab_xlsx:
         tel_v = "" if not tel_col_x else str(row.get(tel_col_x, "") or "")
         id_v = "" if not id_col_x else str(row.get(id_col_x, "") or "")
 
-        # ====== exclure Salomé Galbois ======
+        # exclure Salomé Galbois
         if is_salome_galbois(nom_v, prenom_v):
             continue
 
@@ -496,21 +503,20 @@ with tab_xlsx:
         safe = unicodedata.normalize('NFKD', safe).encode('ascii', 'ignore').decode('ascii')
         return (safe or "Classe")[:31]
 
-    # --------- Choix moteur Excel: xlsxwriter si dispo, sinon openpyxl ---------
+    # Choix moteur Excel
     try:
         import xlsxwriter  # noqa: F401
         EXCEL_ENGINE = "xlsxwriter"
     except Exception:
         EXCEL_ENGINE = "openpyxl"
 
-    # Helpers mise en forme selon moteur
+    # Mise en forme selon moteur
     def format_sheet_xlsxwriter(writer, sheet_name, df_len):
         wb = writer.book
         ws = writer.sheets[sheet_name]
         header_fmt = wb.add_format({"bold": True, "bg_color": "#EEEEEE", "border": 1})
         cell_fmt   = wb.add_format({"border": 1})
-        # colonnes: ID, Nom, Prénom, Téléphone, Remarque
-        widths = [14, 22, 22, 18, 28]
+        widths = [14, 22, 22, 18, 28]  # ID, Nom, Prénom, Téléphone, Remarque
         for col_idx, w in enumerate(widths):
             ws.set_column(col_idx, col_idx, w)
         ws.set_row(0, 18, header_fmt)
@@ -531,13 +537,10 @@ with tab_xlsx:
     def format_sheet_openpyxl(writer, sheet_name, df_len):
         from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
         ws = writer.sheets[sheet_name]
-        # colonnes: ID, Nom, Prénom, Téléphone, Remarque
-        widths = [14, 22, 22, 18, 28]
-        # Largeurs
+        widths = [14, 22, 22, 18, 28]  # ID, Nom, Prénom, Téléphone, Remarque
         for i, w in enumerate(widths):
             col_letter = idx_to_col(i)
             ws.column_dimensions[col_letter].width = w
-        # En-tête
         header_font = Font(bold=True)
         header_fill = PatternFill(start_color="EEEEEE", end_color="EEEEEE", fill_type="solid")
         thin = Side(style="thin")
@@ -547,13 +550,11 @@ with tab_xlsx:
             cell.fill = header_fill
             cell.border = border
             cell.alignment = Alignment(horizontal="center", vertical="center")
-        # Bordures cellules
-        # 5 colonnes
         for r in range(2, df_len + 2):
             for c in range(1, 5 + 1):
                 ws.cell(row=r, column=c).border = border
 
-    # Génération du fichier Excel .xlsx (multi-onglets)
+    # Génération Excel
     if st.button("📄 Générer l’Excel (1 onglet = 1 classe)"):
         if not nom_col_x or not prenom_col_x:
             st.error("Sélectionne d'abord **Nom** et **Prénom**.")
@@ -563,7 +564,6 @@ with tab_xlsx:
                 if not classes_to_students:
                     df_empty = pd.DataFrame(columns=["ID", "Nom", "Prénom", "Téléphone", "Remarque"])
                     df_empty.to_excel(writer, sheet_name="Aucune classe", index=False)
-                    # Mise en forme minimale
                     if EXCEL_ENGINE == "xlsxwriter":
                         format_sheet_xlsxwriter(writer, "Aucune classe", 0)
                     else:
@@ -640,7 +640,7 @@ with tab_pdf:
             tel_v = "" if not tel_col_p else str(row.get(tel_col_p, "") or "")
             id_v = "" if not id_col_p else str(row.get(id_col_p, "") or "")
 
-            # ====== exclure Salomé Galbois (PDF aussi) ======
+            # exclure Salomé Galbois (PDF aussi)
             if is_salome_galbois(nom_v, prenom_v):
                 continue
 
@@ -648,9 +648,9 @@ with tab_pdf:
                 classes_to_students_pdf[c].append((id_v, nom_v, prenom_v, tel_v))
 
         st.markdown("#### Aperçu PDF (10 lignes du dataset source)")
-        st.dataframe(data.head(10), use_container_width=True)
+        st.dataframe(data.head(10), width="stretch")
 
-        # ====== Génération PDF ======
+        # Génération PDF
         def build_pdf(classes_map: Dict[int, list]) -> bytes:
             buffer = io.BytesIO()
             doc = SimpleDocTemplate(
@@ -681,7 +681,6 @@ with tab_pdf:
                 for id_v, nom_v, prenom_v, tel_v in rows_sorted:
                     data_tbl.append([id_v, nom_v, prenom_v, tel_v, ""])
 
-                # Largeurs colonnes adaptées à A4
                 col_widths = [18*mm, 45*mm, 45*mm, 30*mm, 42*mm]
 
                 tbl = Table(data_tbl, colWidths=col_widths, hAlign="LEFT")
