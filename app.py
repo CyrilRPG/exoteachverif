@@ -1,11 +1,12 @@
 # app.py — Vérification I3/I4+ + Export Excel/PDF (1 onglet/page = 1 classe)
 # FIXES :
-# - Désactivation du file watcher Streamlit via variable d’environnement (pas d’appel st.set_option)
-# - Remplacement de use_container_width=True par width="stretch" (API moderne)
+# - Pas d'appel à st.set_option (évite StreamlitAPIException)
+# - st.set_page_config protégé (try/except)
+# - use_container_width remplacé par width="stretch"
 # MODIFS conservées :
-# - Ajout colonne "ID" (issue de l’Excel) dans les exports Excel et PDF
-# - Suppression de la colonne "Fiches récupérées ?"
-# - Tout le reste inchangé
+# - Colonne "ID" (issue de l’Excel) dans Excel & PDF
+# - Suppression "Fiches récupérées ?"
+# - Vérification I3/I4+, mêmes règles/exclusions/tri/exports
 
 # ==== IMPORTANT : désactiver le watcher AVANT d'importer streamlit ====
 import os
@@ -22,6 +23,16 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
+# Tente la configuration de page ; si l'environnement la refuse, on ignore proprement
+try:
+    st.set_page_config(
+        page_title="Vérif Groupes Étudiants — I3/I4+ & Excel multi-onglets",
+        page_icon="✅",
+        layout="wide",
+    )
+except Exception:
+    pass
+
 # ====== PDF (reportlab) ======
 try:
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
@@ -34,7 +45,6 @@ except Exception:
     REPORTLAB_OK = False
 
 # ------------------------------- UI / THEME -------------------------------
-st.set_page_config(page_title="Vérif Groupes Étudiants — I3/I4+ & Excel multi-onglets", page_icon="✅", layout="wide")
 st.markdown("""
 <style>
 :root { --radius: 14px; }
@@ -49,57 +59,41 @@ st.title("Vérification des groupes étudiants — format I3/I4+ & Export Excel 
 
 # ==================== RÉFÉRENTIEL (FILIERES ↔ CLASSES) ====================
 FILIERE_NAMES: Dict[int, str] = {
-    # USPN
     5016: "LAS - USPN 25/26",
     5017: "PASS - USPN 25/26",
     5018: "LSPS - USPN 25/26",
-    # UPC
     5012: "PASS - UPC 25/26",
     5013: "LAS - UPC 25/26",
-    # SU
     5014: "PASS - SU (TC) 25/26",
-    # UVSQ
     5015: "PASS - UVSQ 25/26",
-    # UPS
     5019: "PASS - UPS 25/26",
-    # UPEC
     5020: "LAS1 Majeure disciplinaire - UPEC 25/26",
     5021: "LSPS1 - UPEC 25-26",
     5022: "LSPS2 - UPEC 25-26",
     5032: "LSPS3 - UPEC - 25-26",
-    # PAES
     5023: "PAES - Présentiel 25-26",
     5024: "PAES - Distanciel 25-26",
-    # Terminale Santé
     5025: "Terminale Santé 25-26 - Présentiel",
     5026: "Terminale Santé 25-26 - Distanciel",
-    # Première Élite
     5027: "Première Élite 25-26",
 }
 
 CLASS_NAMES: Dict[int, str] = {
-    # USPN
     5944: "USPN - Classe 1 (LAS) 25/26",
     5943: "USPN - Classe 2 (PASS/LSPS) 25/26",
     5942: "USPN - Classe 1 (PASS/LSPS) 25/26",
-    # UPC (PASS)
     5935: "PASS UPC - Classe 4 25/26",
     5934: "PASS UPC - Classe 3 25/26",
     5933: "PASS UPC - Classe 2 25/26",
     5932: "PASS UPC - Classe 1 25/26",
-    # UPC (LAS)
     5931: "LAS UPC - Classe 1 25/26",
-    # SU
     5940: "PASS SU - Classe 5 (Mineure Sciences) 25/26",
     5939: "PASS SU - Classe 4 (Mineure Lettres) 25/26",
     5938: "PASS SU - Classe 3 (Mineure Sciences) 25/26",
     5937: "PASS SU - Classe 2 (Mineure Sciences) 25/26",
     5936: "PASS SU - Classe 1 (Mineure Sciences) 25/26",
-    # UVSQ
     5941: "PASS UVSQ - Classe 1 25/26",
-    # UPS
     5945: "PASS UPS - Classe 1 25/26",
-    # UPEC
     5953: "LSPS2 UPEC - Classe 3 (25-26)",
     5952: "LSPS2 UPEC - Classe 2 (25-26)",
     5951: "LSPS2 UPEC - Classe 1 (25-26)",
@@ -108,13 +102,11 @@ CLASS_NAMES: Dict[int, str] = {
     5948: "LSPS1 UPEC - Classe 2 25/26",
     5947: "LSPS1 UPEC - Classe 1 25-26",
     5946: "LAS1 Majeure disciplinaire - UPEC - Classe 1 25/26",
-    # PAES
     6127: "PAES Distanciel - Classe 1 25/26",
     6125: "PAES Présentiel - Classe 4 25/26",
     6124: "PAES Présentiel - Classe 2 25/26",
     6123: "PAES Présentiel - Classe 3 25/26",
     6122: "PAES Présentiel - Classe 1 25/26",
-    # Terminale Santé
     6120: "Terminale Santé Distanciel - Classe 1 25/26",
     6119: "Terminale Santé Présentiel - Classe 8 25/26",
     6118: "Terminale Santé Présentiel - Classe 7 25/26",
@@ -124,7 +116,6 @@ CLASS_NAMES: Dict[int, str] = {
     6114: "Terminale Santé Présentiel - Classe 3 25/26",
     6113: "Terminale Santé Présentiel - Classe 2 25/26",
     6112: "Terminale Santé Présentiel - Classe 1 25/26",
-    # Première Élite
     6128: "Première Elite - Classe 1 25/26",
 }
 
@@ -194,15 +185,12 @@ def analyser_groupes(groupes_str: Any) -> str:
 
     if len(filieres) == 0 and len(classes) == 0:
         return "Pas de classe ni de filière"
-
     if len(filieres) == 0 and len(classes) > 0:
         if has_exception:
             return "OK"
         return "Pas de filière"
-
     if len(classes) == 0 and len(filieres) > 0:
         return "Pas de classe"
-
     if len(filieres) > 1 and len(classes) > 1:
         return "Plusieurs filières et plusieurs classes"
     if len(filieres) > 1:
@@ -214,8 +202,7 @@ def analyser_groupes(groupes_str: Any) -> str:
     c = classes[0]
     if c in CLASSES_TO_FILIERES and f in CLASSES_TO_FILIERES[c]:
         return "OK"
-    else:
-        return "Classe et filière incohérents"
+    return "Classe et filière incohérents"
 
 def extra_info(groupes_str: Any) -> Dict[str, Any]:
     nums = parse_numeros(groupes_str)
@@ -335,7 +322,7 @@ start_row_idx = int(start_row_manual) - 1 if start_row_manual > 0 else auto_star
 headers = make_unique(list(raw.iloc[header_row_idx].astype(str)))
 data = raw.iloc[start_row_idx:, :].reset_index(drop=True)
 if data.shape[1] > len(headers):
-    headers = headers + [f"COL_{i}" for i in range(data.shape[1] - len(headers))]
+    headers += [f"COL_{i}" for i in range(data.shape[1] - len(headers))]
 else:
     headers = headers[: data.shape[1]]
 data.columns = headers
@@ -360,15 +347,19 @@ tab_verif, tab_xlsx, tab_pdf = st.tabs(["✅ Vérification", "📄 Listes Excel 
 with tab_verif:
     st.subheader("Paramètres colonnes (Vérification)")
     nom_guess, prenom_guess = autodetect_name_columns(list(data.columns))
+
+    def _sel_index(options, guess):
+        return options.index(guess) if guess in options else 0
+
+    options_cols = ["—"] + list(data.columns)
+
     col1, col2 = st.columns(2)
     with col1:
-        nom_col = st.selectbox("Colonne Nom", options=["—"] + list(data.columns),
-                               index=(["—"] + list(data.columns)).index(nom_guess) if nom_guess in (["—"] + list(data.columns)) else 0,
-                               key="nom_verif")
+        nom_col = st.selectbox("Colonne Nom", options=options_cols,
+                               index=_sel_index(options_cols, nom_guess), key="nom_verif")
     with col2:
-        prenom_col = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns),
-                                  index=(["—"] + list(data.columns)).index(prenom_guess) if prenom_guess in (["—"] + list(data.columns)) else 0,
-                                  key="prenom_verif")
+        prenom_col = st.selectbox("Colonne Prénom", options=options_cols,
+                                  index=_sel_index(options_cols, prenom_guess), key="prenom_verif")
     nom_col = None if nom_col == "—" else nom_col
     prenom_col = None if prenom_col == "—" else prenom_col
     if not nom_col or not prenom_col:
@@ -443,23 +434,22 @@ with tab_xlsx:
     tel_guess = autodetect_phone_column(list(data.columns))
     id_guess = autodetect_id_column(list(data.columns))
 
+    options_cols = ["—"] + list(data.columns)
+    def _sel_index(options, guess): return options.index(guess) if guess in options else 0
+
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        nom_col_x = st.selectbox("Colonne Nom", options=["—"] + list(data.columns],
-                                 index=(["—"] + list(data.columns]).index(nom_guess2) if nom_guess2 in (["—"] + list(data.columns]) else 0,
-                                 key="nom_xlsx")
+        nom_col_x = st.selectbox("Colonne Nom", options=options_cols,
+                                 index=_sel_index(options_cols, nom_guess2), key="nom_xlsx")
     with c2:
-        prenom_col_x = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns],
-                                    index=(["—"] + list(data.columns]).index(prenom_guess2) if prenom_guess2 in (["—"] + list(data.columns]) else 0,
-                                    key="prenom_xlsx")
+        prenom_col_x = st.selectbox("Colonne Prénom", options=options_cols,
+                                    index=_sel_index(options_cols, prenom_guess2), key="prenom_xlsx")
     with c3:
-        tel_col_x = st.selectbox("Colonne Téléphone", options=["—"] + list(data.columns],
-                                 index=(["—"] + list(data.columns]).index(tel_guess) if tel_guess in (["—"] + list(data.columns]) else 0,
-                                 key="tel_xlsx")
+        tel_col_x = st.selectbox("Colonne Téléphone", options=options_cols,
+                                 index=_sel_index(options_cols, tel_guess), key="tel_xlsx")
     with c4:
-        id_col_x = st.selectbox("Colonne ID (Excel)", options=["—"] + list(data.columns],
-                                index=(["—"] + list(data.columns]).index(id_guess) if id_guess in (["—"] + list(data.columns]) else 0,
-                                key="id_xlsx")
+        id_col_x = st.selectbox("Colonne ID (Excel)", options=options_cols,
+                                index=_sel_index(options_cols, id_guess), key="id_xlsx")
 
     nom_col_x = None if nom_col_x == "—" else nom_col_x
     prenom_col_x = None if prenom_col_x == "—" else prenom_col_x
@@ -477,7 +467,6 @@ with tab_xlsx:
 
     for _, row in data.iterrows():
         nums = parse_numeros(row.get(GROUPES_COL_NAME))
-        # EXCLUSION des "numéros exception" dans l'export Excel
         if any(n in EXCEPTION_OK_IF_CLASS_ONLY for n in nums):
             continue
         cls = classes_for_row(nums)
@@ -488,7 +477,6 @@ with tab_xlsx:
         tel_v = "" if not tel_col_x else str(row.get(tel_col_x, "") or "")
         id_v = "" if not id_col_x else str(row.get(id_col_x, "") or "")
 
-        # exclure Salomé Galbois
         if is_salome_galbois(nom_v, prenom_v):
             continue
 
@@ -496,7 +484,6 @@ with tab_xlsx:
             classes_to_students[c].append((id_v, nom_v, prenom_v, tel_v))
 
     def sanitize_sheet_name(name: str) -> str:
-        # Nettoie pour Excel (<=31 char, pas de : \ / ? * [ ])
         safe = "".join(ch for ch in name if ch not in '[]:*?/\\').strip()
         safe = unicodedata.normalize('NFKD', safe).encode('ascii', 'ignore').decode('ascii')
         return (safe or "Classe")[:31]
@@ -535,7 +522,7 @@ with tab_xlsx:
     def format_sheet_openpyxl(writer, sheet_name, df_len):
         from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
         ws = writer.sheets[sheet_name]
-        widths = [14, 22, 22, 18, 28]  # ID, Nom, Prénom, Téléphone, Remarque
+        widths = [14, 22, 22, 18, 28]
         for i, w in enumerate(widths):
             col_letter = idx_to_col(i)
             ws.column_dimensions[col_letter].width = w
@@ -597,23 +584,22 @@ with tab_pdf:
         tel_guess3 = autodetect_phone_column(list(data.columns))
         id_guess3 = autodetect_id_column(list(data.columns))
 
+        options_cols = ["—"] + list(data.columns)
+        def _sel_index(options, guess): return options.index(guess) if guess in options else 0
+
         p1, p2, p3, p4 = st.columns(4)
         with p1:
-            nom_col_p = st.selectbox("Colonne Nom (PDF)", options=["—"] + list(data.columns),
-                                     index=(["—"] + list(data.columns)).index(nom_guess3) if nom_guess3 in (["—"] + list(data.columns)) else 0,
-                                     key="nom_pdf")
+            nom_col_p = st.selectbox("Colonne Nom (PDF)", options=options_cols,
+                                     index=_sel_index(options_cols, nom_guess3), key="nom_pdf")
         with p2:
-            prenom_col_p = st.selectbox("Colonne Prénom (PDF)", options=["—"] + list(data.columns),
-                                        index=(["—"] + list(data.columns)).index(prenom_guess3) if prenom_guess3 in (["—"] + list(data.columns)) else 0,
-                                        key="prenom_pdf")
+            prenom_col_p = st.selectbox("Colonne Prénom (PDF)", options=options_cols,
+                                        index=_sel_index(options_cols, prenom_guess3), key="prenom_pdf")
         with p3:
-            tel_col_p = st.selectbox("Colonne Téléphone (PDF)", options=["—"] + list(data.columns),
-                                     index=(["—"] + list(data.columns)).index(tel_guess3) if tel_guess3 in (["—"] + list(data.columns)) else 0,
-                                     key="tel_pdf")
+            tel_col_p = st.selectbox("Colonne Téléphone (PDF)", options=options_cols,
+                                     index=_sel_index(options_cols, tel_guess3), key="tel_pdf")
         with p4:
-            id_col_p = st.selectbox("Colonne ID (PDF)", options=["—"] + list(data.columns),
-                                    index=(["—"] + list(data.columns)).index(id_guess3) if id_guess3 in (["—"] + list(data.columns)) else 0,
-                                    key="id_pdf")
+            id_col_p = st.selectbox("Colonne ID (PDF)", options=options_cols,
+                                    index=_sel_index(options_cols, id_guess3), key="id_pdf")
 
         nom_col_p = None if nom_col_p == "—" else nom_col_p
         prenom_col_p = None if prenom_col_p == "—" else prenom_col_p
@@ -638,7 +624,6 @@ with tab_pdf:
             tel_v = "" if not tel_col_p else str(row.get(tel_col_p, "") or "")
             id_v = "" if not id_col_p else str(row.get(id_col_p, "") or "")
 
-            # exclure Salomé Galbois (PDF aussi)
             if is_salome_galbois(nom_v, prenom_v):
                 continue
 
@@ -673,7 +658,6 @@ with tab_pdf:
                 elements.append(Paragraph(label, styles["ClassTitle"]))
                 elements.append(Spacer(1, 4))
 
-                # En-têtes PDF : ID, Nom, Prénom, Téléphone, Remarque
                 data_tbl = [["ID", "Nom", "Prénom", "Téléphone", "Remarque"]]
                 rows_sorted = sorted(classes_map[ccode], key=lambda t: ((t[1] or "").lower(), (t[2] or "").lower()))
                 for id_v, nom_v, prenom_v, tel_v in rows_sorted:
@@ -688,12 +672,10 @@ with tab_pdf:
                     ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                     ("FONTSIZE", (0, 0), (-1, 0), 10),
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-
                     ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
                     ("ALIGN", (0, 1), (-1, -1), "LEFT"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                     ("FONTSIZE", (0, 1), (-1, -1), 9),
-
                     ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FAFAFA")]),
                     ("LEFTPADDING", (0, 0), (-1, -1), 4),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 4),
