@@ -1,4 +1,9 @@
-# app.py — Vérification I3/I4+ + Export Excel (1 onglet = 1 classe, avec 2 colonnes vides)
+# app.py — Vérification I3/I4+ + Export Excel/PDF (1 onglet/page = 1 classe)
+# MODIFS :
+# - Ajout colonne "ID" (issues de l'Excel) dans les exports Excel et PDF
+# - Suppression de la colonne "Fiches récupérées ?"
+# - Tout le reste inchangé
+
 import json
 import re
 from typing import List, Tuple, Dict, Any, Optional, Set
@@ -259,6 +264,15 @@ def autodetect_phone_column(columns: List[str]) -> Optional[str]:
             return c
     return None
 
+# ====== NEW: auto-détection colonne ID ======
+def autodetect_id_column(columns: List[str]) -> Optional[str]:
+    lower_map = {c: str(c).strip().lower() for c in columns}
+    for c, l in lower_map.items():
+        # on reste simple : “id” seul ou entouré
+        if re.fullmatch(r".*\bid\b.*", l):
+            return c
+    return None
+
 def detect_data_start(raw: pd.DataFrame, groupes_col_idx: int, header_row_idx: int) -> int:
     start_probe = header_row_idx + 1
     max_probe = min(len(raw), header_row_idx + 50)
@@ -333,7 +347,6 @@ if digits4 == 0:
     st.write(data[GROUPES_COL_NAME].head(10))
 
 # --------------------------- Onglets ---------------------------
-# ====== NEW: ajout d’un onglet PDF, tout le reste inchangé ======
 tab_verif, tab_xlsx, tab_pdf = st.tabs(["✅ Vérification", "📄 Listes Excel (1 onglet = 1 classe)", "🖨️ Listes PDF (1 page = 1 classe)"])
 
 # =========================
@@ -423,7 +436,9 @@ with tab_xlsx:
     st.subheader("Paramètres colonnes (Excel)")
     nom_guess2, prenom_guess2 = autodetect_name_columns(list(data.columns))
     tel_guess = autodetect_phone_column(list(data.columns))
-    c1, c2, c3 = st.columns(3)
+    id_guess = autodetect_id_column(list(data.columns))
+
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         nom_col_x = st.selectbox("Colonne Nom", options=["—"] + list(data.columns),
                                  index=(["—"] + list(data.columns)).index(nom_guess2) if nom_guess2 in (["—"] + list(data.columns)) else 0,
@@ -436,14 +451,20 @@ with tab_xlsx:
         tel_col_x = st.selectbox("Colonne Téléphone", options=["—"] + list(data.columns),
                                  index=(["—"] + list(data.columns)).index(tel_guess) if tel_guess in (["—"] + list(data.columns)) else 0,
                                  key="tel_xlsx")
+    with c4:
+        id_col_x = st.selectbox("Colonne ID (Excel)", options=["—"] + list(data.columns),
+                                index=(["—"] + list(data.columns)).index(id_guess) if id_guess in (["—"] + list(data.columns)) else 0,
+                                key="id_xlsx")
+
     nom_col_x = None if nom_col_x == "—" else nom_col_x
     prenom_col_x = None if prenom_col_x == "—" else prenom_col_x
     tel_col_x = None if tel_col_x == "—" else tel_col_x
+    id_col_x = None if id_col_x == "—" else id_col_x
 
     st.markdown("#### Aperçu (10 lignes)")
     st.dataframe(data.head(10), use_container_width=True)
 
-    # Préparer : classes -> étudiants (Nom, Prénom, Téléphone + colonnes vides)
+    # Préparer : classes -> étudiants (ID, Nom, Prénom, Téléphone + Remarque)
     classes_to_students: Dict[int, list] = defaultdict(list)
 
     def classes_for_row(nums: List[int]) -> Set[int]:
@@ -460,13 +481,14 @@ with tab_xlsx:
         nom_v = "" if not nom_col_x else str(row.get(nom_col_x, "") or "")
         prenom_v = "" if not prenom_col_x else str(row.get(prenom_col_x, "") or "")
         tel_v = "" if not tel_col_x else str(row.get(tel_col_x, "") or "")
+        id_v = "" if not id_col_x else str(row.get(id_col_x, "") or "")
 
-        # ====== NEW: exclure Salomé Galbois ======
+        # ====== exclure Salomé Galbois ======
         if is_salome_galbois(nom_v, prenom_v):
             continue
 
         for c in cls:
-            classes_to_students[c].append((nom_v, prenom_v, tel_v))
+            classes_to_students[c].append((id_v, nom_v, prenom_v, tel_v))
 
     def sanitize_sheet_name(name: str) -> str:
         # Nettoie pour Excel (<=31 char, pas de : \ / ? * [ ])
@@ -487,7 +509,8 @@ with tab_xlsx:
         ws = writer.sheets[sheet_name]
         header_fmt = wb.add_format({"bold": True, "bg_color": "#EEEEEE", "border": 1})
         cell_fmt   = wb.add_format({"border": 1})
-        widths = [22, 22, 18, 28, 22]
+        # colonnes: ID, Nom, Prénom, Téléphone, Remarque
+        widths = [14, 22, 22, 18, 28]
         for col_idx, w in enumerate(widths):
             ws.set_column(col_idx, col_idx, w)
         ws.set_row(0, 18, header_fmt)
@@ -508,7 +531,8 @@ with tab_xlsx:
     def format_sheet_openpyxl(writer, sheet_name, df_len):
         from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
         ws = writer.sheets[sheet_name]
-        widths = [22, 22, 18, 28, 22]
+        # colonnes: ID, Nom, Prénom, Téléphone, Remarque
+        widths = [14, 22, 22, 18, 28]
         # Largeurs
         for i, w in enumerate(widths):
             col_letter = idx_to_col(i)
@@ -524,8 +548,9 @@ with tab_xlsx:
             cell.border = border
             cell.alignment = Alignment(horizontal="center", vertical="center")
         # Bordures cellules
+        # 5 colonnes
         for r in range(2, df_len + 2):
-            for c in range(1, 6+0):  # 5 colonnes
+            for c in range(1, 5 + 1):
                 ws.cell(row=r, column=c).border = border
 
     # Génération du fichier Excel .xlsx (multi-onglets)
@@ -536,7 +561,7 @@ with tab_xlsx:
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine=EXCEL_ENGINE) as writer:
                 if not classes_to_students:
-                    df_empty = pd.DataFrame(columns=["Nom", "Prénom", "Téléphone", "Remarque", "Fiches récupérées ?"])
+                    df_empty = pd.DataFrame(columns=["ID", "Nom", "Prénom", "Téléphone", "Remarque"])
                     df_empty.to_excel(writer, sheet_name="Aucune classe", index=False)
                     # Mise en forme minimale
                     if EXCEL_ENGINE == "xlsxwriter":
@@ -547,10 +572,9 @@ with tab_xlsx:
                     for ccode in sorted(classes_to_students.keys(), key=lambda c: CLASS_NAMES.get(c, str(c))):
                         label = CLASS_NAMES.get(ccode, f"Classe {ccode}")
                         sheet = sanitize_sheet_name(label)
-                        rows_sorted = sorted(classes_to_students[ccode], key=lambda t: ((t[0] or "").lower(), (t[1] or "").lower()))
-                        df_sheet = pd.DataFrame(rows_sorted, columns=["Nom", "Prénom", "Téléphone"])
+                        rows_sorted = sorted(classes_to_students[ccode], key=lambda t: ((t[1] or "").lower(), (t[2] or "").lower()))
+                        df_sheet = pd.DataFrame(rows_sorted, columns=["ID", "Nom", "Prénom", "Téléphone"])
                         df_sheet["Remarque"] = ""
-                        df_sheet["Fiches récupérées ?"] = ""
                         df_sheet.to_excel(writer, sheet_name=sheet, index=False)
                         if EXCEL_ENGINE == "xlsxwriter":
                             format_sheet_xlsxwriter(writer, sheet, len(df_sheet))
@@ -573,7 +597,9 @@ with tab_pdf:
         st.subheader("Paramètres colonnes (PDF)")
         nom_guess3, prenom_guess3 = autodetect_name_columns(list(data.columns))
         tel_guess3 = autodetect_phone_column(list(data.columns))
-        p1, p2, p3 = st.columns(3)
+        id_guess3 = autodetect_id_column(list(data.columns))
+
+        p1, p2, p3, p4 = st.columns(4)
         with p1:
             nom_col_p = st.selectbox("Colonne Nom (PDF)", options=["—"] + list(data.columns),
                                      index=(["—"] + list(data.columns)).index(nom_guess3) if nom_guess3 in (["—"] + list(data.columns)) else 0,
@@ -586,9 +612,15 @@ with tab_pdf:
             tel_col_p = st.selectbox("Colonne Téléphone (PDF)", options=["—"] + list(data.columns),
                                      index=(["—"] + list(data.columns)).index(tel_guess3) if tel_guess3 in (["—"] + list(data.columns)) else 0,
                                      key="tel_pdf")
+        with p4:
+            id_col_p = st.selectbox("Colonne ID (PDF)", options=["—"] + list(data.columns),
+                                    index=(["—"] + list(data.columns)).index(id_guess3) if id_guess3 in (["—"] + list(data.columns)) else 0,
+                                    key="id_pdf")
+
         nom_col_p = None if nom_col_p == "—" else nom_col_p
         prenom_col_p = None if prenom_col_p == "—" else prenom_col_p
         tel_col_p = None if tel_col_p == "—" else tel_col_p
+        id_col_p = None if id_col_p == "—" else id_col_p
 
         # Construire classes->étudiants (mêmes règles d’exclusion)
         classes_to_students_pdf: Dict[int, list] = defaultdict(list)
@@ -606,21 +638,21 @@ with tab_pdf:
             nom_v = "" if not nom_col_p else str(row.get(nom_col_p, "") or "")
             prenom_v = "" if not prenom_col_p else str(row.get(prenom_col_p, "") or "")
             tel_v = "" if not tel_col_p else str(row.get(tel_col_p, "") or "")
+            id_v = "" if not id_col_p else str(row.get(id_col_p, "") or "")
 
-            # ====== NEW: exclure Salomé Galbois (PDF aussi) ======
+            # ====== exclure Salomé Galbois (PDF aussi) ======
             if is_salome_galbois(nom_v, prenom_v):
                 continue
 
             for c in cls:
-                classes_to_students_pdf[c].append((nom_v, prenom_v, tel_v))
+                classes_to_students_pdf[c].append((id_v, nom_v, prenom_v, tel_v))
 
         st.markdown("#### Aperçu PDF (10 lignes du dataset source)")
         st.dataframe(data.head(10), use_container_width=True)
 
-        # ====== NEW: fonction de génération PDF (mise en page soignée) ======
+        # ====== Génération PDF ======
         def build_pdf(classes_map: Dict[int, list]) -> bytes:
             buffer = io.BytesIO()
-            # Marges confortables
             doc = SimpleDocTemplate(
                 buffer, pagesize=A4,
                 leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm
@@ -630,8 +662,6 @@ with tab_pdf:
             styles.add(ParagraphStyle(name="Meta", parent=styles["Normal"], fontSize=8, textColor=colors.grey))
 
             elements = []
-
-            # En-tête global (date)
             today = datetime.now().strftime("%d/%m/%Y %H:%M")
             elements.append(Paragraph(f"Généré le {today}", styles["Meta"]))
             elements.append(Spacer(1, 4))
@@ -645,15 +675,15 @@ with tab_pdf:
                 elements.append(Paragraph(label, styles["ClassTitle"]))
                 elements.append(Spacer(1, 4))
 
-                data_tbl = [["Nom", "Prénom", "Téléphone", "Remarque", "Fiches récupérées ?"]]
-                rows_sorted = sorted(classes_map[ccode], key=lambda t: ((t[0] or "").lower(), (t[1] or "").lower()))
-                for nom_v, prenom_v, tel_v in rows_sorted:
-                    data_tbl.append([nom_v, prenom_v, tel_v, "", ""])
+                # En-têtes PDF : ID, Nom, Prénom, Téléphone, Remarque
+                data_tbl = [["ID", "Nom", "Prénom", "Téléphone", "Remarque"]]
+                rows_sorted = sorted(classes_map[ccode], key=lambda t: ((t[1] or "").lower(), (t[2] or "").lower()))
+                for id_v, nom_v, prenom_v, tel_v in rows_sorted:
+                    data_tbl.append([id_v, nom_v, prenom_v, tel_v, ""])
 
-                # Largeurs colonnes (A4 ~ 180-190mm utilisables avec marges)
-                col_widths = [45*mm, 45*mm, 30*mm, 35*mm, 35*mm]
+                # Largeurs colonnes adaptées à A4
+                col_widths = [18*mm, 45*mm, 45*mm, 30*mm, 42*mm]
 
-                # Table & style
                 tbl = Table(data_tbl, colWidths=col_widths, hAlign="LEFT")
                 tbl.setStyle(TableStyle([
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEEEEE")),
@@ -667,7 +697,6 @@ with tab_pdf:
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                     ("FONTSIZE", (0, 1), (-1, -1), 9),
 
-                    # zébrage lignes
                     ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FAFAFA")]),
                     ("LEFTPADDING", (0, 0), (-1, -1), 4),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 4),
