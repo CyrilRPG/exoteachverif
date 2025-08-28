@@ -1,9 +1,9 @@
 # app.py — Vérification I3/I4+ + Export Excel/PDF (1 onglet/page = 1 classe)
 # FIXES :
-# - Désactivation du file watcher Streamlit pour éviter "inotify instance limit reached"
+# - Désactivation du file watcher Streamlit via variable d’environnement (pas d’appel st.set_option)
 # - Remplacement de use_container_width=True par width="stretch" (API moderne)
 # MODIFS conservées :
-# - Ajout colonne "ID" (issue de l'Excel) dans les exports Excel et PDF
+# - Ajout colonne "ID" (issue de l’Excel) dans les exports Excel et PDF
 # - Suppression de la colonne "Fiches récupérées ?"
 # - Tout le reste inchangé
 
@@ -20,9 +20,7 @@ import unicodedata
 from datetime import datetime
 
 import pandas as pd
-
 import streamlit as st
-st.set_option("server.fileWatcherType", "none")  # ceinture + bretelles
 
 # ====== PDF (reportlab) ======
 try:
@@ -447,20 +445,20 @@ with tab_xlsx:
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        nom_col_x = st.selectbox("Colonne Nom", options=["—"] + list(data.columns),
-                                 index=(["—"] + list(data.columns)).index(nom_guess2) if nom_guess2 in (["—"] + list(data.columns)) else 0,
+        nom_col_x = st.selectbox("Colonne Nom", options=["—"] + list(data.columns],
+                                 index=(["—"] + list(data.columns]).index(nom_guess2) if nom_guess2 in (["—"] + list(data.columns]) else 0,
                                  key="nom_xlsx")
     with c2:
-        prenom_col_x = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns),
-                                    index=(["—"] + list(data.columns)).index(prenom_guess2) if prenom_guess2 in (["—"] + list(data.columns)) else 0,
+        prenom_col_x = st.selectbox("Colonne Prénom", options=["—"] + list(data.columns],
+                                    index=(["—"] + list(data.columns]).index(prenom_guess2) if prenom_guess2 in (["—"] + list(data.columns]) else 0,
                                     key="prenom_xlsx")
     with c3:
-        tel_col_x = st.selectbox("Colonne Téléphone", options=["—"] + list(data.columns),
-                                 index=(["—"] + list(data.columns)).index(tel_guess) if tel_guess in (["—"] + list(data.columns)) else 0,
+        tel_col_x = st.selectbox("Colonne Téléphone", options=["—"] + list(data.columns],
+                                 index=(["—"] + list(data.columns]).index(tel_guess) if tel_guess in (["—"] + list(data.columns]) else 0,
                                  key="tel_xlsx")
     with c4:
-        id_col_x = st.selectbox("Colonne ID (Excel)", options=["—"] + list(data.columns),
-                                index=(["—"] + list(data.columns)).index(id_guess) if id_guess in (["—"] + list(data.columns)) else 0,
+        id_col_x = st.selectbox("Colonne ID (Excel)", options=["—"] + list(data.columns],
+                                index=(["—"] + list(data.columns]).index(id_guess) if id_guess in (["—"] + list(data.columns]) else 0,
                                 key="id_xlsx")
 
     nom_col_x = None if nom_col_x == "—" else nom_col_x
