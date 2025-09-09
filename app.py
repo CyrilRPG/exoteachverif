@@ -70,7 +70,7 @@ FILIERE_NAMES: Dict[int, str] = {
     5020: "LAS1 Majeure disciplinaire - UPEC 25/26",
     5021: "LSPS1 - UPEC 25-26",
     5022: "LSPS2 - UPEC 25-26",
-    5032: "LSPS3 - UPEC - 25-26",
+    5032: "LSPS3 - UPEC - 25-26",  # <-- LSPS3 UPEC (filière)
     5023: "PAES - Présentiel 25-26",
     5024: "PAES - Distanciel 25-26",
     5025: "Terminale Santé 25-26 - Présentiel",
@@ -117,6 +117,7 @@ CLASS_NAMES: Dict[int, str] = {
     6113: "Terminale Santé Présentiel - Classe 2 25/26",
     6112: "Terminale Santé Présentiel - Classe 1 25/26",
     6128: "Première Elite - Classe 1 25/26",
+    6374: "LSPS3 UPEC - Classe 1 (25-26)",  # <-- LSPS3 UPEC (classe 1)
 }
 
 # FILIERE -> CLASSES autorisées
@@ -132,7 +133,7 @@ FILIERE_TO_CLASSES: Dict[int, Set[int]] = {
     5020: {5946},
     5021: {5947, 5948, 5949, 5950},
     5022: {5951, 5952, 5953},
-    5032: set(),
+    5032: {6374},  # <-- mapping LSPS3 UPEC -> classe 1
     5023: {6122, 6123, 6124, 6125},
     5024: {6127},
     5025: {6112, 6113, 6114, 6115, 6116, 6117, 6118, 6119},
